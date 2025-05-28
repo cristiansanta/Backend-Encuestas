@@ -18,6 +18,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ConditionsController;
 use App\Http\Controllers\FileController;
 use App\Http\Controllers\NotificationSurvaysController;
+use App\Http\Controllers\TemporarySurveyController;
 
 
 
@@ -195,6 +196,15 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
     Route::prefix('data')->controller(TypeinfoController::class)->group(function () {
         Route::get('/{type}', 'getData')->name('data.getData');
+    });
+    
+    Route::prefix('temporary-surveys')->controller(TemporarySurveyController::class)->group(function () {
+        Route::get('/', 'index')->name('temporary-surveys.index');
+        Route::post('/', 'store')->name('temporary-surveys.store');
+        Route::get('/{id}', 'show')->name('temporary-surveys.show');
+        Route::put('/{id}', 'update')->name('temporary-surveys.update');
+        Route::delete('/{id}', 'destroy')->name('temporary-surveys.destroy');
+        Route::post('/auto-save', 'autoSave')->name('temporary-surveys.auto-save');
     });
     
     Route::prefix('Conditions')->controller(ConditionsController::class)->group(function () {
