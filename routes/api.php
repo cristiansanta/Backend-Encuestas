@@ -19,6 +19,7 @@ use App\Http\Controllers\ConditionsController;
 use App\Http\Controllers\FileController;
 use App\Http\Controllers\NotificationSurvaysController;
 use App\Http\Controllers\TemporarySurveyController;
+use App\Http\Controllers\GroupController;
 
 
 
@@ -28,6 +29,20 @@ Route::get('/storage/images/{filename}', [FileController::class, 'show']);
 Route::post('/login', [AuthController::class, 'login']);
 
 Route::post('newusers/store', [UserController::class, 'store']);
+
+// Rutas temporales para testing de grupos (sin autenticación)
+Route::prefix('groups-test')->controller(GroupController::class)->group(function () {
+    Route::get('/', 'index');
+    Route::post('/add-user', 'addUser');
+    Route::post('/add-users', 'addUsers');
+    Route::get('/{id}/users', 'getGroupUsers');
+    Route::put('/{groupId}/users/{userId}', 'updateUser');
+    Route::delete('/{groupId}/users/{userId}', 'deleteUser');
+    Route::get('/surveys-list', [SurveyController::class, 'list']);
+});
+
+// Ruta temporal para testing de notificaciones (sin autenticación)
+Route::post('notification-test/store', [NotificationSurvaysController::class, 'store']);
 
 Route::middleware(['auth:sanctum'])->group(function () {
     
@@ -77,6 +92,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
        // Route::get('/pin', 'pon')->name('surveys.pon');
       
         Route::get('/', 'index')->name('surveys.index');
+        // obtener lista de encuestas para envío masivo
+        Route::get('/list', 'list')->name('surveys.list');
         Route::post('/create', 'create')->name('surveys.create');
         Route::post('/store', 'store')->name('surveys.store');
         Route::get('/{id}', 'show')->name('surveys.show');
@@ -214,6 +231,18 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/{id}', 'show')->name('Conditions.show');
         Route::put('/{id}', 'update')->name('Conditions.update');
         Route::delete('/{id}', 'destroy')->name('Conditions.destroy');
+    });
+
+    Route::prefix('groups')->controller(GroupController::class)->group(function () {
+        Route::get('/', 'index')->name('groups.index');
+        Route::post('/store', 'store')->name('groups.store');
+        Route::get('/{id}', 'show')->name('groups.show');
+        Route::delete('/{id}', 'destroy')->name('groups.destroy');
+        Route::get('/{id}/users', 'getGroupUsers')->name('groups.getGroupUsers');
+        Route::post('/add-user', 'addUser')->name('groups.addUser');
+        Route::post('/add-users', 'addUsers')->name('groups.addUsers');
+        Route::put('/{groupId}/users/{userId}', 'updateUser')->name('groups.updateUser');
+        Route::delete('/{groupId}/users/{userId}', 'deleteUser')->name('groups.deleteUser');
     });
     
 });

@@ -302,4 +302,33 @@ public function getAllSurveyDetails()
              return 'Error: ' . $e->getMessage();
          }
      }
+
+    /**
+     * Obtener lista de encuestas para envío masivo
+     */
+    public function list()
+    {
+        try {
+            $surveys = SurveyModel::select('id', 'title', 'descrip', 'status', 'created_at')
+                ->where('status', 1) // Solo encuestas activas
+                ->orderBy('created_at', 'desc')
+                ->get()
+                ->map(function ($survey) {
+                    return [
+                        'id' => $survey->id,
+                        'title' => $survey->title,
+                        'description' => $survey->descrip,
+                        'status' => $survey->status,
+                        'created_at' => $survey->created_at
+                    ];
+                });
+
+            return response()->json($surveys, 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Error al obtener las encuestas',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
 }
