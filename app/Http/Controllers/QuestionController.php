@@ -14,12 +14,27 @@ class QuestionController extends Controller
     /**
      * Display a listing of the resource.
      */
-    public function index()
+    public function index(Request $request)
     {
-        //
-        $question   = QuestionModel::all();
-        return response()->json($question); // Cambiado para devolver JSON
-        //return view('categorys.index', compact('categorys'));
+        $query = QuestionModel::query();
+        
+        // Filtrar por banco si se especifica
+        if ($request->has('bank')) {
+            $query->where('bank', $request->bank);
+        }
+        
+        // Filtrar por tipo de pregunta si se especifica
+        if ($request->has('type')) {
+            $query->where('type_questions_id', $request->type);
+        }
+        
+        // Incluir relaciones si se solicita
+        if ($request->has('with_details')) {
+            $query->with(['type', 'options']);
+        }
+        
+        $questions = $query->get();
+        return response()->json($questions);
     }
 public function store(Request $request)
 {
@@ -28,11 +43,12 @@ public function store(Request $request)
         'title' => 'required|string|max:255',        
         'descrip' => 'nullable|string',
         'validate' => 'required|string|max:255',
-        'cod_padre' => 'nullable|integer',
+        'cod_padre' => 'required|integer',
         'bank' => 'required|boolean',
         'type_questions_id' => 'required|integer',
         'creator_id' => 'required|integer',
-        'questions_conditions' => 'required|boolean',        
+        'questions_conditions' => 'required|boolean',
+        'section_id' => 'nullable|integer', // Añadido para soportar secciones       
     ]);
 
     if ($validator->fails()) {
@@ -130,6 +146,12 @@ public function store(Request $request)
                 ]);
                 // Actualizar solo el campo 'cod_padre'
                 $question->cod_padre = $request->cod_padre;
+            } elseif ($request->has('section_id') && count($request->all()) === 1) {
+                $request->validate([
+                    'section_id' => 'nullable|integer',
+                ]);
+                // Actualizar solo el campo 'section_id'
+                $question->section_id = $request->section_id;
             } else {
                 $request->validate([
                     'title' => 'required|string|max:255',

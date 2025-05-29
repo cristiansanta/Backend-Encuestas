@@ -58,7 +58,7 @@ class SectionController extends Controller
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
             'descrip_sect' => 'nullable|string',
-            'id_survey' => 'required|integer',
+            'id_survey' => 'nullable|integer',
     
         ]);
      
@@ -73,10 +73,16 @@ class SectionController extends Controller
     // Obtener todos los datos validados
     $data = $request->all();
     // Verificar si ya existe un registro con los mismos datos clave
-    $existingsections = SectionModel::where('title', $data['title'])
-                                    ->where('descrip_sect', $data['descrip_sect'])
-                                    ->where('id_survey', $data['id_survey'])
-                                    ->first();
+    $query = SectionModel::where('title', $data['title'])
+                         ->where('descrip_sect', $data['descrip_sect']);
+    
+    if (isset($data['id_survey'])) {
+        $query->where('id_survey', $data['id_survey']);
+    } else {
+        $query->whereNull('id_survey');
+    }
+    
+    $existingsections = $query->first();
 
     if ($existingsections) {
         // Si el registro ya existe, devolver un mensaje indicando que ya fue creado
@@ -146,7 +152,7 @@ class SectionController extends Controller
         $section = SectionModel::find($id);
         if ($section) {
             // Validar que los nombres o títulos en el JSON están siendo enviados correctamente
-            $requiredFields = ['title', 'descrip_sect', 'id_survey'];
+            $requiredFields = ['title', 'descrip_sect'];
             foreach ($requiredFields as $field) {
                 if (!$request->has($field)) {
                     return response()->json(['message' => 'Campo requerido faltante: ' . $field], 400);
@@ -157,19 +163,21 @@ class SectionController extends Controller
             $request->validate([
                 'title' => 'required|string|max:255',
                 'descrip_sect' => 'nullable|string',
-                'id_survey' => 'required|integer',
+                'id_survey' => 'nullable|integer',
             ]);
     
             // Verificar diferencias en las llaves foráneas
             $novedades = [];
-            if ($section->id_survey != $request->id_survey) {
+            if ($request->has('id_survey') && $section->id_survey != $request->id_survey) {
                 $novedades[] = 'Diferencia en id_survey: de ' . $section->id_survey . ' a ' . $request->id_survey;
             }
     
             // Actualizar los campos
             $section->title = $request->title;
             $section->descrip_sect = $request->descrip_sect;
-            $section->id_survey = $request->id_survey;
+            if ($request->has('id_survey')) {
+                $section->id_survey = $request->id_survey;
+            }
     
             if ($section->save()) {
                 $message = 'Actualizado con éxito, id: ' . $id;
