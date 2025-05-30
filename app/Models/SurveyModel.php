@@ -11,13 +11,19 @@ class SurveyModel extends Model
 
     protected $table = "surveys";
     protected $fillable = [
-
         'title',
         'descrip',
         'id_category',
         'status',
-        'user_create'
-
+        'user_create',
+        'start_date',
+        'end_date'
+    ];
+    
+    protected $casts = [
+        'start_date' => 'datetime',
+        'end_date' => 'datetime',
+        'status' => 'boolean'
     ];
 
     // Definir la relación belongsTo

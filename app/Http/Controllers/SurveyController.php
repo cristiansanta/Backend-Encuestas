@@ -154,7 +154,9 @@ class SurveyController extends Controller
             'descrip' => 'nullable|string',
             'id_category' => 'nullable|integer',
             'status' => 'nullable|boolean',
-            'user_create' => 'required|string',
+            'user_create' => 'nullable|string',
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date|after_or_equal:start_date'
         ]);
     
         if ($validator->fails()) {
@@ -176,6 +178,18 @@ class SurveyController extends Controller
     
         if ($request->has('status')) {
             $survey->status = $request->status;
+        }
+        
+        if ($request->has('user_create')) {
+            $survey->user_create = $request->user_create;
+        }
+        
+        if ($request->has('start_date')) {
+            $survey->start_date = $request->start_date;
+        }
+        
+        if ($request->has('end_date')) {
+            $survey->end_date = $request->end_date;
         }
     
         // Guardar los cambios
@@ -280,12 +294,55 @@ public function getAllSurveyDetails()
         'surveyQuestions.question.options',
         'surveyQuestions.question.conditions' // Renombra el campo si es necesario
     ])->orderBy('id', 'desc')->get(); // Ordenar por 'id' de mayor a menor
+    
+    // Actualizar el estado de las encuestas dinámicamente
+    $surveys->each(function($survey) {
+        $this->updateSurveyStatusBasedOnDates($survey);
+    });
 
     if ($surveys->isNotEmpty()) {
         return response()->json($surveys);
     } else {
         return response()->json(['message' => 'No surveys found'], 404);
     }
+}
+
+/**
+ * Actualiza el estado de una encuesta basándose en las fechas
+ */
+private function updateSurveyStatusBasedOnDates($survey)
+{
+    // Solo actualizar si la encuesta está publicada (status = true)
+    if (!$survey->status || !$survey->start_date || !$survey->end_date) {
+        return;
+    }
+    
+    $now = now();
+    $startDate = $survey->start_date;
+    $endDate = $survey->end_date;
+    
+    // Calcular días hasta el final
+    $daysUntilEnd = $now->diffInDays($endDate, false);
+    
+    // Si la fecha de fin ya pasó, marcar como finalizada
+    if ($endDate < $now) {
+        $survey->survey_status = 'Finalizada';
+    }
+    // Si faltan 3 días o menos para finalizar
+    elseif ($daysUntilEnd <= 3 && $daysUntilEnd >= 0) {
+        $survey->survey_status = 'Próxima a Finalizar';
+    }
+    // Si está dentro del rango de fechas y publicada
+    elseif ($startDate <= $now && $now <= $endDate) {
+        $survey->survey_status = 'Activa';
+    }
+    // Si aún no ha comenzado
+    else {
+        $survey->survey_status = 'Programada';
+    }
+    
+    // No guardar en la base de datos, solo actualizar el objeto en memoria
+    // para no afectar el campo status booleano
 }
 
 
