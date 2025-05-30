@@ -55,7 +55,7 @@ class SurveyController extends Controller
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
             'descrip' => 'nullable|string',
-            'id_category' => 'required|integer',
+            'id_category' => 'nullable|integer',
             'status' => 'required|boolean',
             'user_create' => 'required|string',
         ]);
