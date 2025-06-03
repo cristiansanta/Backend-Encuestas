@@ -15,6 +15,7 @@ class SurveyModel extends Model
         'descrip',
         'id_category',
         'status',
+        'publication_status',
         'user_create',
         'start_date',
         'end_date'

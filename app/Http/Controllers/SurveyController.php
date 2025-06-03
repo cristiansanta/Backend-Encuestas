@@ -57,6 +57,7 @@ class SurveyController extends Controller
             'descrip' => 'nullable|string',
             'id_category' => 'nullable|integer',
             'status' => 'required|boolean',
+            'publication_status' => 'nullable|in:draft,unpublished,published',
             'user_create' => 'required|string',
         ]);
 
@@ -154,6 +155,7 @@ class SurveyController extends Controller
             'descrip' => 'nullable|string',
             'id_category' => 'nullable|integer',
             'status' => 'nullable|boolean',
+            'publication_status' => 'nullable|in:draft,unpublished,published',
             'user_create' => 'nullable|string',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:start_date'
@@ -178,6 +180,10 @@ class SurveyController extends Controller
     
         if ($request->has('status')) {
             $survey->status = $request->status;
+        }
+        
+        if ($request->has('publication_status')) {
+            $survey->publication_status = $request->publication_status;
         }
         
         if ($request->has('user_create')) {
@@ -366,8 +372,8 @@ private function updateSurveyStatusBasedOnDates($survey)
     public function list()
     {
         try {
-            $surveys = SurveyModel::select('id', 'title', 'descrip', 'status', 'created_at')
-                ->where('status', 1) // Solo encuestas activas
+            $surveys = SurveyModel::select('id', 'title', 'descrip', 'status', 'publication_status', 'created_at')
+                ->whereIn('publication_status', ['unpublished', 'published']) // Incluir sin publicar y publicadas
                 ->orderBy('created_at', 'desc')
                 ->get()
                 ->map(function ($survey) {
@@ -376,6 +382,7 @@ private function updateSurveyStatusBasedOnDates($survey)
                         'title' => $survey->title,
                         'description' => $survey->descrip,
                         'status' => $survey->status,
+                        'publication_status' => $survey->publication_status,
                         'created_at' => $survey->created_at
                     ];
                 });
@@ -386,6 +393,36 @@ private function updateSurveyStatusBasedOnDates($survey)
                 'message' => 'Error al obtener las encuestas',
                 'error' => $e->getMessage()
             ], 500);
+        }
+    }
+
+    /**
+     * Actualizar solo el estado de publicación de una encuesta
+     */
+    public function updatePublicationStatus(Request $request, string $id)
+    {
+        $survey = SurveyModel::find($id);
+        if (!$survey) {
+            return response()->json(['message' => 'No se encontró la encuesta con id: ' . $id], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'publication_status' => 'required|in:draft,unpublished,published',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Error de validación', 'errors' => $validator->errors()], 422);
+        }
+
+        $survey->publication_status = $request->publication_status;
+
+        if ($survey->save()) {
+            return response()->json([
+                'message' => 'Estado de publicación actualizado con éxito', 
+                'data' => $survey
+            ], 200);
+        } else {
+            return response()->json(['message' => 'Error al actualizar el estado de publicación'], 500);
         }
     }
 }
