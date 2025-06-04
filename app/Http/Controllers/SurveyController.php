@@ -276,40 +276,100 @@ class SurveyController extends Controller
      // Función para obtener una encuesta completa con sus relaciones
      public function getSurveyDetails($id)
 {
-    $survey = SurveyModel::with([
-        'category',
-        'sections',
-        'surveyQuestions.question.type',
-        'surveyQuestions.question.options',
-        'surveyQuestions.question.conditions' // Renombra el campo
-    ])->find($id);
+    try {
+        $survey = SurveyModel::with([
+            'category',
+            'sections',
+            'surveyQuestions.question.type',
+            'surveyQuestions.question.options',
+            'surveyQuestions.question.conditions'
+        ])->find($id);
 
-    if ($survey) {
+        if (!$survey) {
+            return response()->json(['message' => 'Survey not found'], 404);
+        }
+
+        // Log información de debug
+        \Log::info("getSurveyDetails for survey {$id} - Sections: {$survey->sections->count()}, Questions: {$survey->surveyQuestions->count()}");
+
+        // Agregar contadores para debug
+        $survey->sections_count = $survey->sections->count();
+        $survey->questions_count = $survey->surveyQuestions->count();
+        $survey->has_content = $survey->sections->count() > 0 || $survey->surveyQuestions->count() > 0;
+
+        // Si no tiene contenido, verificar si hay secciones o preguntas huérfanas
+        if (!$survey->has_content) {
+            // Buscar secciones que podrían estar relacionadas pero con id_survey NULL
+            $potentialSections = \DB::table('sections')
+                ->whereNull('id_survey')
+                ->orWhere('id_survey', $id)
+                ->get();
+
+            // Buscar preguntas que podrían estar relacionadas
+            $potentialQuestions = \DB::table('survey_questions')
+                ->where('survey_id', $id)
+                ->get();
+
+            $survey->debug_info = [
+                'potential_sections' => $potentialSections->count(),
+                'potential_questions' => $potentialQuestions->count(),
+                'suggestion' => 'Consider running /surveys/repair-relations to fix orphaned relations'
+            ];
+        }
+
         return response()->json($survey);
-    } else {
-        return response()->json(['message' => 'Survey not found'], 404);
+
+    } catch (\Exception $e) {
+        \Log::error("Error in getSurveyDetails for survey {$id}: " . $e->getMessage());
+        
+        return response()->json([
+            'error' => 'Error loading survey details',
+            'message' => $e->getMessage(),
+            'survey_id' => $id
+        ], 500);
     }
 }
 // Función para obtener todas las encuestas completas con sus relaciones
 public function getAllSurveyDetails()
 {
-    $surveys = SurveyModel::with([
-        'category',
-        'sections',
-        'surveyQuestions.question.type',
-        'surveyQuestions.question.options',
-        'surveyQuestions.question.conditions' // Renombra el campo si es necesario
-    ])->orderBy('id', 'desc')->get(); // Ordenar por 'id' de mayor a menor
-    
-    // Actualizar el estado de las encuestas dinámicamente
-    $surveys->each(function($survey) {
-        $this->updateSurveyStatusBasedOnDates($survey);
-    });
+    try {
+        $surveys = SurveyModel::with([
+            'category',
+            'sections',
+            'surveyQuestions.question.type',
+            'surveyQuestions.question.options',
+            'surveyQuestions.question.conditions'
+        ])->orderBy('id', 'desc')->get();
+        
+        // Log para debug
+        \Log::info('getAllSurveyDetails - Total surveys found: ' . $surveys->count());
+        
+        // Actualizar el estado de las encuestas dinámicamente y agregar debug info
+        $surveys->each(function($survey) {
+            $this->updateSurveyStatusBasedOnDates($survey);
+            
+            // Log de debug para cada encuesta
+            \Log::info("Survey {$survey->id} - Sections: {$survey->sections->count()}, Questions: {$survey->surveyQuestions->count()}");
+            
+            // Agregar contadores para el frontend
+            $survey->sections_count = $survey->sections->count();
+            $survey->questions_count = $survey->surveyQuestions->count();
+        });
 
-    if ($surveys->isNotEmpty()) {
-        return response()->json($surveys);
-    } else {
-        return response()->json(['message' => 'No surveys found'], 404);
+        if ($surveys->isNotEmpty()) {
+            return response()->json($surveys);
+        } else {
+            return response()->json(['message' => 'No surveys found'], 404);
+        }
+    } catch (\Exception $e) {
+        \Log::error('Error in getAllSurveyDetails: ' . $e->getMessage());
+        \Log::error('Error trace: ' . $e->getTraceAsString());
+        
+        return response()->json([
+            'error' => 'Error loading surveys',
+            'message' => $e->getMessage(),
+            'debug' => config('app.debug') ? $e->getTraceAsString() : null
+        ], 500);
     }
 }
 
@@ -423,6 +483,215 @@ private function updateSurveyStatusBasedOnDates($survey)
             ], 200);
         } else {
             return response()->json(['message' => 'Error al actualizar el estado de publicación'], 500);
+        }
+    }
+
+    /**
+     * Método de debug para diagnosticar problemas con relaciones
+     */
+    public function debugSurveyRelations($id)
+    {
+        try {
+            // Obtener encuesta básica
+            $survey = SurveyModel::find($id);
+            if (!$survey) {
+                return response()->json(['error' => 'Survey not found'], 404);
+            }
+
+            // Debug información básica
+            $debug = [
+                'survey_id' => $survey->id,
+                'survey_title' => $survey->title,
+                'survey_status' => $survey->status,
+            ];
+
+            // Verificar secciones directamente
+            $sectionsQuery = "SELECT * FROM sections WHERE id_survey = ?";
+            $sections = \DB::select($sectionsQuery, [$id]);
+            $debug['sections_raw_query'] = $sections;
+            $debug['sections_count'] = count($sections);
+
+            // Verificar preguntas directamente  
+            $questionsQuery = "SELECT * FROM survey_questions WHERE survey_id = ?";
+            $questions = \DB::select($questionsQuery, [$id]);
+            $debug['questions_raw_query'] = $questions;
+            $debug['questions_count'] = count($questions);
+
+            // Buscar preguntas huérfanas que podrían estar relacionadas con las secciones
+            if (count($sections) > 0) {
+                $sectionIds = array_column($sections, 'id');
+                $sectionIdsString = implode(',', $sectionIds);
+                $orphanQuestionsQuery = "SELECT q.*, s.id_survey FROM questions q 
+                                       LEFT JOIN sections s ON q.section_id = s.id 
+                                       WHERE s.id_survey = ?";
+                $orphanQuestions = \DB::select($orphanQuestionsQuery, [$id]);
+                $debug['orphan_questions'] = $orphanQuestions;
+                $debug['orphan_questions_count'] = count($orphanQuestions);
+                
+                // Análisis del problema
+                $debug['analysis'] = [
+                    'has_sections' => count($sections) > 0,
+                    'has_survey_questions' => count($questions) > 0,
+                    'has_orphan_questions' => count($orphanQuestions) > 0,
+                    'problem_detected' => count($orphanQuestions) > 0 && count($questions) === 0,
+                    'issue_description' => count($orphanQuestions) > 0 && count($questions) === 0 
+                        ? 'Questions exist linked to sections but not in survey_questions pivot table' 
+                        : 'No issues detected'
+                ];
+            }
+
+            // Probar relaciones Eloquent
+            $surveyWithRelations = SurveyModel::with(['sections', 'surveyQuestions'])->find($id);
+            $debug['eloquent_sections'] = $surveyWithRelations->sections->toArray();
+            $debug['eloquent_questions'] = $surveyWithRelations->surveyQuestions->toArray();
+            $debug['eloquent_sections_count'] = $surveyWithRelations->sections->count();
+            $debug['eloquent_questions_count'] = $surveyWithRelations->surveyQuestions->count();
+
+            return response()->json($debug);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Debug failed',
+                'message' => $e->getMessage(),
+                'line' => $e->getLine(),
+                'file' => $e->getFile()
+            ], 500);
+        }
+    }
+
+    /**
+     * Reparar relaciones faltantes entre encuestas y preguntas
+     */
+    public function repairSurveyQuestions($id)
+    {
+        try {
+            $survey = SurveyModel::find($id);
+            if (!$survey) {
+                return response()->json(['error' => 'Survey not found'], 404);
+            }
+
+            // Obtener secciones de la encuesta
+            $sections = \DB::select("SELECT * FROM sections WHERE id_survey = ?", [$id]);
+            
+            if (empty($sections)) {
+                return response()->json([
+                    'message' => 'No sections found for this survey',
+                    'survey_id' => $id
+                ]);
+            }
+
+            $sectionIds = array_column($sections, 'id');
+            
+            // Buscar preguntas asociadas a las secciones pero no a la encuesta
+            $orphanQuestions = \DB::select("
+                SELECT q.* FROM questions q 
+                WHERE q.section_id IN (" . implode(',', $sectionIds) . ")
+                AND q.id NOT IN (
+                    SELECT question_id FROM survey_questions WHERE survey_id = ?
+                )
+            ", [$id]);
+
+            $repairedCount = 0;
+            $errors = [];
+
+            foreach ($orphanQuestions as $question) {
+                try {
+                    // Insertar en la tabla pivot survey_questions
+                    \DB::insert("
+                        INSERT INTO survey_questions (survey_id, question_id, section_id, creator_id, status, user_id) 
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ", [
+                        $id,
+                        $question->id,
+                        $question->section_id,
+                        $question->creator_id ?? 1,
+                        1, // status activo
+                        $question->creator_id ?? 1
+                    ]);
+                    $repairedCount++;
+                } catch (\Exception $e) {
+                    $errors[] = "Question ID {$question->id}: " . $e->getMessage();
+                }
+            }
+
+            return response()->json([
+                'survey_id' => $id,
+                'survey_title' => $survey->title,
+                'sections_count' => count($sections),
+                'orphan_questions_found' => count($orphanQuestions),
+                'questions_repaired' => $repairedCount,
+                'errors' => $errors,
+                'success' => $repairedCount > 0
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Repair failed',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Verificar y reparar relaciones de encuestas
+     */
+    public function repairSurveyRelations()
+    {
+        try {
+            $report = [
+                'total_surveys' => 0,
+                'surveys_without_sections' => 0,
+                'surveys_without_questions' => 0,
+                'orphaned_sections' => 0,
+                'orphaned_questions' => 0,
+                'repaired_sections' => 0,
+                'repaired_questions' => 0,
+                'errors' => []
+            ];
+
+            // Obtener todas las encuestas
+            $surveys = SurveyModel::all();
+            $report['total_surveys'] = $surveys->count();
+
+            // Verificar secciones huérfanas (sin id_survey)
+            $orphanedSections = \DB::table('sections')->whereNull('id_survey')->get();
+            $report['orphaned_sections'] = $orphanedSections->count();
+
+            // Verificar preguntas huérfanas (sin survey_id válido)
+            $orphanedQuestions = \DB::table('survey_questions')
+                ->leftJoin('surveys', 'survey_questions.survey_id', '=', 'surveys.id')
+                ->whereNull('surveys.id')
+                ->select('survey_questions.*')
+                ->get();
+            $report['orphaned_questions'] = $orphanedQuestions->count();
+
+            foreach ($surveys as $survey) {
+                $sectionsCount = $survey->sections()->count();
+                $questionsCount = $survey->surveyQuestions()->count();
+
+                if ($sectionsCount === 0) {
+                    $report['surveys_without_sections']++;
+                }
+
+                if ($questionsCount === 0) {
+                    $report['surveys_without_questions']++;
+                }
+            }
+
+            // Mostrar información de reparación disponible
+            $report['repair_suggestions'] = [
+                'orphaned_sections_can_be_assigned' => $orphanedSections->count() > 0,
+                'orphaned_questions_can_be_cleaned' => $orphanedQuestions->count() > 0,
+                'note' => 'Use /surveys/repair-relations/execute para ejecutar reparaciones automáticas'
+            ];
+
+            return response()->json($report);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Repair check failed',
+                'message' => $e->getMessage()
+            ], 500);
         }
     }
 }
