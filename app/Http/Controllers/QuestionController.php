@@ -28,6 +28,11 @@ class QuestionController extends Controller
             $query->where('type_questions_id', $request->type);
         }
         
+        // Filtrar por sección si se especifica
+        if ($request->has('section_id')) {
+            $query->where('section_id', $request->section_id);
+        }
+        
         // Incluir relaciones si se solicita
         if ($request->has('with_details')) {
             $query->with(['type', 'options']);

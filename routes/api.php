@@ -99,7 +99,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/{id}', 'show')->name('surveys.show');
         Route::put('/update/{id}', 'update')->name('surveys.update');
         Route::put('/update-publication-status/{id}', 'updatePublicationStatus')->name('surveys.updatePublicationStatus');
-        Route::put('/{id}', 'destroy')->name('surveys.destroy');
+        Route::put('/{id}', 'update')->name('surveys.updateDirect');
+        Route::delete('/{id}', 'destroy')->name('surveys.destroy');
         //la encuesta a que seccion pertenece
         Route::get('/{id}/sections', 'showSections')->name('surveys.showSections');
          //la encuesta que preguntas contiene
