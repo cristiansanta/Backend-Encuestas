@@ -148,7 +148,18 @@ class CategoryController extends Controller
             
             // Verificar si la categoría existe
             if ($category) {
-                // Eliminar la categoría
+                // Verificar si hay encuestas asociadas a esta categoría
+                $surveysCount = $category->surveys()->count();
+                
+                if ($surveysCount > 0) {
+                    return response()->json([
+                        'message' => 'No se puede eliminar la categoría porque tiene ' . $surveysCount . ' encuesta(s) asociada(s).',
+                        'error' => 'foreign_key_constraint',
+                        'surveys_count' => $surveysCount
+                    ], 409); // 409 Conflict
+                }
+                
+                // Si no hay encuestas asociadas, eliminar la categoría
                 $category->delete();
                 return response()->json(['message' => 'Registro eliminado con éxito.'], 200);
             } else {

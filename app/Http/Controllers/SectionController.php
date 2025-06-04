@@ -17,12 +17,7 @@ class SectionController extends Controller
             // Ordenar las secciones por 'id' en orden descendente y luego por 'title' en orden ascendente
             $sections = SectionModel::orderBy('id', 'desc')->get();
     
-            // Verificar si se encontraron secciones
-            if ($sections->isEmpty()) {
-                return response()->json(['message' => 'No se encontraron secciones'], 404);
-            }
-    
-            // Devolver las secciones en formato JSON
+            // Devolver las secciones en formato JSON (arreglo vacío si no hay secciones)
             return response()->json($sections, 200);
         } catch (\Illuminate\Database\QueryException $e) {
             // Manejo de errores específicos de la base de datos
