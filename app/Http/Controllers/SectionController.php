@@ -103,7 +103,7 @@ class SectionController extends Controller
         return response()->json($response, 200);
     } catch (\Exception $e) {
         // Capturar cualquier excepción y devolver un error 500
-        return response()->json(['error' => 'Error al crear la pregunta', 'details' => $e->getMessage()], 500);
+        return response()->json(['error' => 'Error al crear la sección', 'details' => $e->getMessage()], 500);
     }    
     }
 
