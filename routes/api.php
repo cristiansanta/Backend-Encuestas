@@ -20,6 +20,7 @@ use App\Http\Controllers\FileController;
 use App\Http\Controllers\NotificationSurvaysController;
 use App\Http\Controllers\TemporarySurveyController;
 use App\Http\Controllers\GroupController;
+use App\Http\Controllers\AdminCleanupController;
 
 
 
@@ -251,6 +252,16 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::post('/add-users', 'addUsers')->name('groups.addUsers');
         Route::put('/{groupId}/users/{userId}', 'updateUser')->name('groups.updateUser');
         Route::delete('/{groupId}/users/{userId}', 'deleteUser')->name('groups.deleteUser');
+    });
+
+    // Rutas de administración y limpieza
+    Route::prefix('admin/cleanup')->controller(AdminCleanupController::class)->group(function () {
+        Route::get('/stats', 'getStats')->name('admin.cleanup.stats');
+        Route::post('/surveys', 'cleanupSurveys')->name('admin.cleanup.surveys');
+        Route::post('/categories', 'cleanupOrphanCategories')->name('admin.cleanup.categories');
+        Route::post('/temporaries', 'cleanupTemporarySurveys')->name('admin.cleanup.temporaries');
+        Route::post('/specific-surveys', 'deleteSpecificSurveys')->name('admin.cleanup.specific-surveys');
+        Route::post('/all', 'cleanupAll')->name('admin.cleanup.all');
     });
     
 });

@@ -26,6 +26,14 @@ class SurveyModel extends Model
         'end_date' => 'datetime',
         'status' => 'boolean'
     ];
+    
+    protected $appends = ['survey_questions_count'];
+    
+    // Accessor para contar las preguntas
+    public function getSurveyQuestionsCountAttribute()
+    {
+        return $this->surveyQuestions()->count();
+    }
 
     // Definir la relación belongsTo
     public function category()

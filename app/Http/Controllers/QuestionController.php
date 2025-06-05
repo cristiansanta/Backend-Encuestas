@@ -166,6 +166,7 @@ public function store(Request $request)
                     'bank' => 'required|boolean',
                     'type_questions_id' => 'required|integer',
                     'questions_conditions' => 'required|boolean',
+                    'section_id' => 'nullable|integer',
                 ]);
     
                 // Actualizar todos los campos
@@ -176,6 +177,7 @@ public function store(Request $request)
                 $question->bank = $request->bank;
                 $question->type_questions_id = $request->type_questions_id;
                 $question->questions_conditions = $request->questions_conditions;
+                $question->section_id = $request->section_id;
             }
     
             if ($question->save()) {
