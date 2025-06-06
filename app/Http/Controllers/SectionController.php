@@ -80,12 +80,13 @@ class SectionController extends Controller
     $existingsections = $query->first();
 
     if ($existingsections) {
-        // Si el registro ya existe, devolver un mensaje indicando que ya fue creado
+        // Si el registro ya existe, devolver el ID existente para evitar duplicados
         $response = [
             'message' => 'La seccion ya fue creada exitosamente',
-            //'question' => $existingQuestion->toArray(),
+            'section_id' => $existingsections->id,
+            'already_exists' => true
         ];
-        return response()->json($response, 201);
+        return response()->json($response, 200);
     }
 
     try {

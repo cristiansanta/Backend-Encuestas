@@ -144,10 +144,16 @@ class SurveyController extends Controller
     
     public function update(Request $request, string $id)
     {
+        \Log::info("SurveyController::update - Iniciando actualización de encuesta ID: {$id}");
+        \Log::info("SurveyController::update - Datos recibidos: " . json_encode($request->all()));
+        
         $survey = SurveyModel::find($id);
         if (!$survey) {
+            \Log::error("SurveyController::update - No se encontró la encuesta con ID: {$id}");
             return response()->json(['message' => 'No se encontró la encuesta con id: ' . $id], 404);
         }
+        
+        \Log::info("SurveyController::update - Estado actual de la encuesta: status={$survey->status}, publication_status={$survey->publication_status}");
     
         // Validar los datos de la solicitud
         $validator = Validator::make($request->all(), [
@@ -200,8 +206,10 @@ class SurveyController extends Controller
     
         // Guardar los cambios
         if ($survey->save()) {
+            \Log::info("SurveyController::update - Encuesta actualizada exitosamente. Nuevo estado: status={$survey->status}, publication_status={$survey->publication_status}");
             return response()->json(['message' => 'Encuesta actualizada con éxito', 'data' => $survey], 200);
         } else {
+            \Log::error("SurveyController::update - Error al guardar la encuesta ID: {$id}");
             return response()->json(['message' => 'Error al actualizar la encuesta'], 500);
         }
     }
@@ -212,16 +220,24 @@ class SurveyController extends Controller
      */
     public function destroy(string $id)
 {
+    \Log::warning("SurveyController::destroy - ⚠️ ADVERTENCIA: Intento de eliminar encuesta ID: {$id}");
+    \Log::warning("SurveyController::destroy - Stack trace: " . json_encode(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)));
+    
     $survey = SurveyModel::find($id);
 
     if (!$survey) {
+        \Log::error("SurveyController::destroy - No se encontró la encuesta ID: {$id}");
         return response()->json(['message' => 'No se encontró la encuesta'], 404);
     }
+    
+    \Log::warning("SurveyController::destroy - Encuesta a eliminar: title={$survey->title}, status={$survey->status}, publication_status={$survey->publication_status}");
 
     try {
         $survey->delete();
+        \Log::error("SurveyController::destroy - ❌ ENCUESTA ELIMINADA: ID={$id}, title={$survey->title}");
         return response()->json(['message' => 'Encuesta eliminada con éxito'], 200);
     } catch (\Exception $e) {
+        \Log::error("SurveyController::destroy - Error al eliminar encuesta ID {$id}: " . $e->getMessage());
         return response()->json(['message' => 'Error al eliminar la encuesta', 'error' => $e->getMessage()], 500);
     }
 }
