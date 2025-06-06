@@ -11,14 +11,29 @@ class SurveyModel extends Model
 
     protected $table = "surveys";
     protected $fillable = [
-
         'title',
         'descrip',
         'id_category',
         'status',
-        'user_create'
-
+        'publication_status',
+        'user_create',
+        'start_date',
+        'end_date'
     ];
+    
+    protected $casts = [
+        'start_date' => 'datetime',
+        'end_date' => 'datetime',
+        'status' => 'boolean'
+    ];
+    
+    protected $appends = ['survey_questions_count'];
+    
+    // Accessor para contar las preguntas
+    public function getSurveyQuestionsCountAttribute()
+    {
+        return $this->surveyQuestions()->count();
+    }
 
     // Definir la relación belongsTo
     public function category()

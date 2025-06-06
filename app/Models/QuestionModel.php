@@ -19,7 +19,8 @@ class QuestionModel extends Model
         'bank',
         'type_questions_id',
         'creator_id',
-        'questions_conditions'
+        'questions_conditions',
+        'section_id'
      ];
  
 

@@ -6,9 +6,8 @@
     "license": "MIT",
     "require": {
         "php": "^8.2",
-        "binarytorch/larecipe": "^2.8",
         "ezyang/htmlpurifier": "^4.16",
-        "laravel/framework": "^11.0",
+        "laravel/framework": "^11.32.0",
         "laravel/sanctum": "^4.0",
         "laravel/tinker": "^2.9",
         "predis/predis": "^2.0",
