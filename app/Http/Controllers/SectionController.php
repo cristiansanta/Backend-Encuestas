@@ -11,11 +11,25 @@ class SectionController extends Controller
     /**
      * Display a listing of the resource.
      */
-    public function index()
+    public function index(Request $request)
     {
         try {
-            // Ordenar las secciones por 'id' en orden descendente y luego por 'title' en orden ascendente
-            $sections = SectionModel::orderBy('id', 'desc')->get();
+            // Obtener el usuario autenticado
+            $user = $request->user();
+            
+            if (!$user) {
+                return response()->json(['message' => 'Usuario no autenticado'], 401);
+            }
+            
+            // Filtrar secciones por encuestas del usuario autenticado
+            $sections = SectionModel::where(function($query) use ($user) {
+                                        $query->whereHas('survey', function($subQuery) use ($user) {
+                                            $subQuery->where('user_create', $user->name);
+                                        })
+                                        ->orWhereNull('id_survey'); // También incluir secciones del banco (sin encuesta específica)
+                                    })
+                                    ->orderBy('id', 'desc')
+                                    ->get();
     
             // Devolver las secciones en formato JSON (arreglo vacío si no hay secciones)
             return response()->json($sections, 200);

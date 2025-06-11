@@ -9,10 +9,17 @@ use Illuminate\Support\Facades\Validator;
 class SurveyAnswersController extends Controller
 {
   
-    public function index()
+    public function index(Request $request)
     {
+        // Obtener el usuario autenticado
+        $user = $request->user();
         
-        $answers = SurveyAnswersModel::all();
+        if (!$user) {
+            return response()->json(['message' => 'Usuario no autenticado'], 401);
+        }
+        
+        // Filtrar respuestas por el usuario autenticado
+        $answers = SurveyAnswersModel::where('user_id', $user->id)->get();
         return response()->json($answers); // Cambiado para devolver JSON
        
     }

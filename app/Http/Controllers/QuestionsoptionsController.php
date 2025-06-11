@@ -55,7 +55,6 @@ class QuestionsoptionsController extends Controller
                 QuestionsoptionsModel::create([
                     'questions_id' => $questions_id,
                     'options' => $option['option'] ?? $option, // Verificar si tiene un campo 'option' o es un simple string
-                    'selected' => $option['selected'] ?? false, // Si es verdadero/falso o selección única
                     'creator_id' => $request->input('creator_id'),
                     'status' => $request->input('status'),
                 ]);

@@ -10,9 +10,9 @@ class CategoryModel extends Model
     use HasFactory;
     protected $table = "categories";
     protected $fillable = [
-
         'title',
         'descrip_cat',
+        'user_create',
      ];
      
     // Definir la relación hasMany 1 a muchas 

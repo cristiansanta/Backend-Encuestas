@@ -21,6 +21,7 @@ use App\Http\Controllers\NotificationSurvaysController;
 use App\Http\Controllers\TemporarySurveyController;
 use App\Http\Controllers\GroupController;
 use App\Http\Controllers\AdminCleanupController;
+use App\Http\Controllers\ManualSurveyResponseController;
 
 
 
@@ -261,6 +262,13 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::post('/temporaries', 'cleanupTemporarySurveys')->name('admin.cleanup.temporaries');
         Route::post('/specific-surveys', 'deleteSpecificSurveys')->name('admin.cleanup.specific-surveys');
         Route::post('/all', 'cleanupAll')->name('admin.cleanup.all');
+    });
+
+    // Rutas para respuestas manuales de encuestas
+    Route::prefix('manual-survey-responses')->controller(ManualSurveyResponseController::class)->group(function () {
+        Route::post('/', 'store')->name('manual.survey.responses.store');
+        Route::get('/survey/{surveyId}', 'getResponsesBySurvey')->name('manual.survey.responses.by.survey');
+        Route::get('/', 'getAllResponses')->name('manual.survey.responses.all');
     });
     
 });

@@ -22,6 +22,11 @@ class SectionModel extends Model
      {
          return $this->belongsTo(SurveyModel::class, 'id_survey');
      }
+     
+     public function survey()
+     {
+         return $this->belongsTo(SurveyModel::class, 'id_survey');
+     }
 
      public function questions()
      {

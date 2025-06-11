@@ -19,9 +19,18 @@ class SurveyController extends Controller
     /**
      * Display a listing of the resource.
      */
-    public function index()
+    public function index(Request $request)
     {
-                $surveys = SurveyModel::all();
+        // Obtener el usuario autenticado
+        $user = $request->user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Usuario no autenticado'], 401);
+        }
+        
+        // Filtrar encuestas por el usuario autenticado
+        $surveys = SurveyModel::where('user_create', $user->name)->get();
+        
         return response()->json($surveys); // Cambiado para devolver JSON
         //return view('surveys.index', compact('surveys'));
     }
@@ -65,6 +74,19 @@ class SurveyController extends Controller
             return response()->json([
                 'error' => 'Error de validación',
                 'details' => $validator->errors(),
+            ], 422);
+        }
+        
+        // Validar que no exista otra encuesta con el mismo título para el mismo usuario
+        $existingSurvey = SurveyModel::where('title', $request->title)
+                                    ->where('user_create', $request->user_create)
+                                    ->first();
+                                    
+        if ($existingSurvey) {
+            return response()->json([
+                'error' => 'Error de validación',
+                'details' => ['title' => ['Ya existe una encuesta con este nombre']],
+                'message' => 'Ya tienes una encuesta con el mismo nombre. Por favor, elige un nombre diferente.'
             ], 422);
         }
 
@@ -169,6 +191,22 @@ class SurveyController extends Controller
     
         if ($validator->fails()) {
             return response()->json(['message' => 'Error de validación', 'errors' => $validator->errors()], 422);
+        }
+        
+        // Si se está actualizando el título, validar que no exista otra encuesta con el mismo título para el mismo usuario
+        if ($request->has('title') && $request->title !== $survey->title) {
+            $existingSurvey = SurveyModel::where('title', $request->title)
+                                        ->where('user_create', $survey->user_create)
+                                        ->where('id', '!=', $id)
+                                        ->first();
+                                        
+            if ($existingSurvey) {
+                return response()->json([
+                    'message' => 'Error de validación',
+                    'errors' => ['title' => ['Ya existe una encuesta con este nombre']],
+                    'error' => 'Ya tienes una encuesta con el mismo nombre. Por favor, elige un nombre diferente.'
+                ], 422);
+            }
         }
     
         // Actualizar solo los campos proporcionados en la solicitud
