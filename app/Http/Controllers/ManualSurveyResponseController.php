@@ -52,15 +52,8 @@ class ManualSurveyResponseController extends Controller
                 'response_data' => $data['responses']
             ]);
 
-            // Crear respuestas individuales para cada pregunta
-            foreach ($data['responses'] as $questionId => $response) {
-                SurveyAnswersModel::create([
-                    'survey_question_id' => $questionId,
-                    'answer' => is_array($response) ? $response : [$response],
-                    'user_id' => null, // Para respuestas manuales no hay user_id específico
-                    'status' => true,
-                ]);
-            }
+            // Las respuestas se almacenan como JSON en response_data, no como registros individuales
+            // ya que el frontend envía un objeto con las respuestas estructuradas
 
             return response()->json([
                 'success' => true,

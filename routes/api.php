@@ -46,6 +46,7 @@ Route::prefix('groups-test')->controller(GroupController::class)->group(function
 // Ruta temporal para testing de notificaciones (sin autenticación)
 Route::post('notification-test/store', [NotificationSurvaysController::class, 'store']);
 
+
 Route::middleware(['auth:sanctum'])->group(function () {
     
     Route::prefix('users')->group(function () {
@@ -270,6 +271,10 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/survey/{surveyId}', 'getResponsesBySurvey')->name('manual.survey.responses.by.survey');
         Route::get('/', 'getAllResponses')->name('manual.survey.responses.all');
     });
+
+    // Rutas alternativas para compatibilidad con frontend
+    Route::post('/survey-responses', [ManualSurveyResponseController::class, 'store'])->name('survey.responses.store');
+    Route::get('/surveys/{surveyId}/responses', [ManualSurveyResponseController::class, 'getResponsesBySurvey'])->name('surveys.responses.by.survey');
     
 });
 //ruta con autenticacion quemada en env
