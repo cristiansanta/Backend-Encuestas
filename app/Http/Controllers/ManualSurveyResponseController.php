@@ -16,16 +16,34 @@ class ManualSurveyResponseController extends Controller
     public function store(Request $request)
     {
         try {
+            // ENHANCED DEBUG: Log incoming data for debugging
+            \Log::info('📥 ManualSurveyResponseController - Datos recibidos:', [
+                'all_data' => $request->all(),
+                'survey_id' => $request->input('survey_id'),
+                'survey_id_type' => gettype($request->input('survey_id')),
+                'respondent_name' => $request->input('respondent_name'),
+                'respondent_email' => $request->input('respondent_email'),
+                'responses' => $request->input('responses'),
+                'responses_type' => gettype($request->input('responses')),
+                'responses_is_array' => is_array($request->input('responses')),
+                'status' => $request->input('status')
+            ]);
+
             // Validar los datos de entrada
             $validator = Validator::make($request->all(), [
                 'survey_id' => 'required|integer',
                 'respondent_name' => 'required|string|max:255',
                 'respondent_email' => 'required|email|max:255',
-                'responses' => 'required|array',
+                'responses' => 'required',
                 'status' => 'string|max:50'
             ]);
 
             if ($validator->fails()) {
+                \Log::error('❌ ManualSurveyResponseController - Validación fallida:', [
+                    'errors' => $validator->errors(),
+                    'input_data' => $request->all()
+                ]);
+                
                 return response()->json([
                     'success' => false,
                     'message' => 'Datos de validación incorrectos',
@@ -49,11 +67,17 @@ class ManualSurveyResponseController extends Controller
                 'email' => [$data['respondent_email']], // Array con un email
                 'expired_date' => Carbon::now()->addDays(30),
                 'respondent_name' => $data['respondent_name'],
-                'response_data' => $data['responses']
+                'response_data' => $data['responses'] // Can be either array or object, stored as JSON
             ]);
 
             // Las respuestas se almacenan como JSON en response_data, no como registros individuales
             // ya que el frontend envía un objeto con las respuestas estructuradas
+
+            \Log::info('✅ ManualSurveyResponseController - Respuesta guardada exitosamente:', [
+                'notification_id' => $notification->id,
+                'survey_id' => $data['survey_id'],
+                'respondent_name' => $data['respondent_name']
+            ]);
 
             return response()->json([
                 'success' => true,

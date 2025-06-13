@@ -719,11 +719,12 @@ private function updateSurveyStatusBasedOnDates($survey)
                 return response()->json(['message' => 'Survey not found'], 404);
             }
 
-            // Contar respuestas desde la tabla survey_answers
-            $count = \DB::table('survey_answers')
-                ->where('survey_id', $id)
-                ->distinct('respondent_email') // Contar respuestas únicas por email
-                ->count('respondent_email');
+            // Contar respuestas desde la tabla notificationsurvays donde se almacenan las respuestas reales
+            $count = \DB::table('notificationsurvays')
+                ->where('id_survey', $id)
+                ->where('state_results', true) // Solo contar respuestas completadas
+                ->whereNotNull('respondent_name') // Asegurar que hay un encuestado válido
+                ->count();
 
             return response()->json([
                 'survey_id' => $id,
