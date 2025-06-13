@@ -308,8 +308,18 @@ class SurveyController extends Controller
     {
         $survey = SurveyModel::find($id);
         if ($survey) {
-            $surveyQuestions = $survey->surveyQuestions()->with('question')->get();
-            return response()->json($surveyQuestions);
+            $surveyQuestions = $survey->surveyQuestions()->with([
+                'question.type',
+                'question.options'
+            ])->get();
+            return response()->json([
+                'survey_questions' => $surveyQuestions,
+                'survey_info' => [
+                    'id' => $survey->id,
+                    'title' => $survey->title,
+                    'description' => $survey->descrip
+                ]
+            ]);
         } else {
             return response()->json(['message' => 'Survey not found'], 404);
         }

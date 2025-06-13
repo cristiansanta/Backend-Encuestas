@@ -37,6 +37,7 @@ Route::prefix('groups-test')->controller(GroupController::class)->group(function
     Route::get('/', 'index');
     Route::post('/add-user', 'addUser');
     Route::post('/add-users', 'addUsers');
+    Route::put('/update/{id}', 'update'); // Actualizar grupo
     Route::get('/{id}/users', 'getGroupUsers');
     Route::put('/{groupId}/users/{userId}', 'updateUser');
     Route::delete('/{groupId}/users/{userId}', 'deleteUser');
