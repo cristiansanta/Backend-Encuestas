@@ -68,6 +68,8 @@ class SurveyController extends Controller
             'status' => 'required|boolean',
             'publication_status' => 'nullable|in:draft,unpublished,published',
             'user_create' => 'required|string',
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date|after_or_equal:start_date'
         ]);
 
         if ($validator->fails()) {
