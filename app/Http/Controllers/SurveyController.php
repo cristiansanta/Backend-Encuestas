@@ -60,16 +60,28 @@ class SurveyController extends Controller
 
     public function store(Request $request)
     {
-        // Validar los datos entrantes
-        $validator = Validator::make($request->all(), [
+        // Establecer fechas por defecto si no se proporcionan
+        $data = $request->all();
+        
+        if (empty($data['start_date'])) {
+            $data['start_date'] = now()->format('Y-m-d H:i:s');
+        }
+        
+        if (empty($data['end_date'])) {
+            $tomorrow = now()->addDay();
+            $data['end_date'] = $tomorrow->format('Y-m-d H:i:s');
+        }
+        
+        // Validar los datos entrantes (incluyendo fechas por defecto)
+        $validator = Validator::make($data, [
             'title' => 'required|string|max:255',
             'descrip' => 'nullable|string',
             'id_category' => 'nullable|integer',
             'status' => 'required|boolean',
             'publication_status' => 'nullable|in:draft,unpublished,published',
             'user_create' => 'required|string',
-            'start_date' => 'nullable|date',
-            'end_date' => 'nullable|date|after_or_equal:start_date'
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date'
         ]);
 
         if ($validator->fails()) {
@@ -80,8 +92,8 @@ class SurveyController extends Controller
         }
         
         // Validar que no exista otra encuesta con el mismo título para el mismo usuario
-        $existingSurvey = SurveyModel::where('title', $request->title)
-                                    ->where('user_create', $request->user_create)
+        $existingSurvey = SurveyModel::where('title', $data['title'])
+                                    ->where('user_create', $data['user_create'])
                                     ->first();
                                     
         if ($existingSurvey) {
@@ -91,8 +103,6 @@ class SurveyController extends Controller
                 'message' => 'Ya tienes una encuesta con el mismo nombre. Por favor, elige un nombre diferente.'
             ], 422);
         }
-
-        $data = $request->all();
 
         // Buscar y decodificar imágenes en base64 dentro de la descripción
         if (preg_match_all('/<img src="data:image\/[^;]+;base64,([^"]+)"/', $data['descrip'], $matches)) {
