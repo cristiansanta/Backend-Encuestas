@@ -699,6 +699,39 @@ private function updateSurveyStatusBasedOnDates($survey)
     }
 
     /**
+     * Contar respuestas de una encuesta específica
+     */
+    public function getResponsesCount($id)
+    {
+        try {
+            $survey = SurveyModel::find($id);
+            if (!$survey) {
+                return response()->json(['message' => 'Survey not found'], 404);
+            }
+
+            // Contar respuestas desde la tabla survey_answers
+            $count = \DB::table('survey_answers')
+                ->where('survey_id', $id)
+                ->distinct('respondent_email') // Contar respuestas únicas por email
+                ->count('respondent_email');
+
+            return response()->json([
+                'survey_id' => $id,
+                'responses_count' => $count
+            ], 200);
+
+        } catch (\Exception $e) {
+            \Log::error("Error counting responses for survey {$id}: " . $e->getMessage());
+            
+            return response()->json([
+                'error' => 'Error counting responses',
+                'message' => $e->getMessage(),
+                'survey_id' => $id
+            ], 500);
+        }
+    }
+
+    /**
      * Verificar y reparar relaciones de encuestas
      */
     public function repairSurveyRelations()

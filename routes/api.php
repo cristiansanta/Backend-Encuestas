@@ -114,6 +114,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/{id}/sections/details', 'getSurveySections')->name('surveys.getSurveySections');
          // obtener una encuesta completa con sus relaciones
         Route::get('/{id}/details', 'getSurveyDetails')->name('surveys.getSurveyDetails');
+        // obtener el conteo de respuestas de una encuesta
+        Route::get('/{id}/responses/count', 'getResponsesCount')->name('surveys.getResponsesCount');
         // debug relaciones de una encuesta
         Route::get('/{id}/debug', 'debugSurveyRelations')->name('surveys.debugSurveyRelations');
         // reparar relaciones de una encuesta específica
