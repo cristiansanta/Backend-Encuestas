@@ -28,6 +28,9 @@ class SurveyController extends Controller
             return response()->json(['message' => 'Usuario no autenticado'], 401);
         }
         
+        // Actualizar estados de encuestas automáticamente
+        $this->updateSurveyStatesAutomatic();
+        
         // Filtrar encuestas por el usuario autenticado
         $surveys = SurveyModel::where('user_create', $user->name)->get();
         
@@ -78,7 +81,7 @@ class SurveyController extends Controller
             'descrip' => 'nullable|string',
             'id_category' => 'nullable|integer',
             'status' => 'required|boolean',
-            'publication_status' => 'nullable|in:draft,unpublished,published',
+            'publication_status' => 'nullable|in:draft,unpublished,published,finished,scheduled',
             'user_create' => 'required|string',
             'start_date' => 'required|date',
             'end_date' => 'required|date|after_or_equal:start_date'
@@ -195,7 +198,7 @@ class SurveyController extends Controller
             'descrip' => 'nullable|string',
             'id_category' => 'nullable|integer',
             'status' => 'nullable|boolean',
-            'publication_status' => 'nullable|in:draft,unpublished,published',
+            'publication_status' => 'nullable|in:draft,unpublished,published,finished,scheduled',
             'user_create' => 'nullable|string',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:start_date'
@@ -466,25 +469,58 @@ private function updateSurveyStatusBasedOnDates($survey)
     // Calcular días hasta el final
     $daysUntilEnd = $now->diffInDays($endDate, false);
     
+    $newStatus = null;
+    $newPublicationStatus = $survey->publication_status; // Mantener el actual por defecto
+    
     // Si la fecha de fin ya pasó, marcar como finalizada
     if ($endDate < $now) {
-        $survey->survey_status = 'Finalizada';
+        $newStatus = 'Finalizada';
+        $newPublicationStatus = 'finished'; // Nuevo estado para encuestas finalizadas
     }
     // Si faltan 3 días o menos para finalizar
     elseif ($daysUntilEnd <= 3 && $daysUntilEnd >= 0) {
-        $survey->survey_status = 'Próxima a Finalizar';
+        $newStatus = 'Próxima a Finalizar';
+        // Mantener published si ya estaba publicada
+        if ($survey->publication_status === 'published') {
+            $newPublicationStatus = 'published';
+        }
     }
     // Si está dentro del rango de fechas y publicada
     elseif ($startDate <= $now && $now <= $endDate) {
-        $survey->survey_status = 'Activa';
+        $newStatus = 'Activa';
+        // Mantener published si ya estaba publicada
+        if ($survey->publication_status === 'published') {
+            $newPublicationStatus = 'published';
+        }
     }
     // Si aún no ha comenzado
     else {
-        $survey->survey_status = 'Programada';
+        $newStatus = 'Programada';
+        $newPublicationStatus = 'scheduled'; // Nuevo estado para encuestas programadas
     }
     
-    // No guardar en la base de datos, solo actualizar el objeto en memoria
-    // para no afectar el campo status booleano
+    // Actualizar el objeto en memoria para respuesta inmediata
+    $survey->survey_status = $newStatus;
+    
+    // Solo actualizar en base de datos si hay cambios y la encuesta está finalizada
+    // Esto evita múltiples actualizaciones innecesarias pero garantiza que las finalizadas se persistan
+    if ($newStatus === 'Finalizada' && $survey->publication_status !== 'finished') {
+        try {
+            \DB::table('surveys')
+                ->where('id', $survey->id)
+                ->update([
+                    'publication_status' => 'finished',
+                    'updated_at' => now()
+                ]);
+            
+            // Actualizar el objeto en memoria también
+            $survey->publication_status = 'finished';
+            
+            \Log::info("Survey ID {$survey->id} automatically marked as finished due to end date");
+        } catch (\Exception $e) {
+            \Log::error("Failed to update survey status for ID {$survey->id}: " . $e->getMessage());
+        }
+    }
 }
 
 
@@ -543,7 +579,7 @@ private function updateSurveyStatusBasedOnDates($survey)
         }
 
         $validator = Validator::make($request->all(), [
-            'publication_status' => 'required|in:draft,unpublished,published',
+            'publication_status' => 'required|in:draft,unpublished,published,finished,scheduled',
         ]);
 
         if ($validator->fails()) {
@@ -804,4 +840,132 @@ private function updateSurveyStatusBasedOnDates($survey)
             ], 500);
         }
     }
+
+/**
+ * Migrar estados de encuestas existentes para sincronizar con fechas
+ * Útil para corregir encuestas que tienen publication_status incorrecto
+ */
+public function migrateSurveyStates()
+{
+    try {
+        $surveys = SurveyModel::whereNotNull('start_date')
+                            ->whereNotNull('end_date')
+                            ->where('status', true) // Solo encuestas publicadas
+                            ->get();
+        
+        $migratedCount = 0;
+        $report = [];
+        
+        foreach ($surveys as $survey) {
+            $now = now();
+            $endDate = $survey->end_date;
+            $startDate = $survey->start_date;
+            
+            $shouldBeFinished = $endDate < $now;
+            $shouldBeScheduled = $startDate > $now;
+            
+            $needsUpdate = false;
+            $newStatus = $survey->publication_status;
+            
+            // Si debería estar finalizada pero no lo está
+            if ($shouldBeFinished && $survey->publication_status !== 'finished') {
+                $newStatus = 'finished';
+                $needsUpdate = true;
+            }
+            // Si debería estar programada pero no lo está
+            elseif ($shouldBeScheduled && $survey->publication_status !== 'scheduled') {
+                $newStatus = 'scheduled';
+                $needsUpdate = true;
+            }
+            // Si está en rango y debería estar publicada
+            elseif (!$shouldBeFinished && !$shouldBeScheduled && $survey->publication_status !== 'published') {
+                $newStatus = 'published';
+                $needsUpdate = true;
+            }
+            
+            if ($needsUpdate) {
+                $oldStatus = $survey->publication_status;
+                $survey->publication_status = $newStatus;
+                $survey->save();
+                
+                $report[] = [
+                    'id' => $survey->id,
+                    'title' => $survey->title,
+                    'old_status' => $oldStatus,
+                    'new_status' => $newStatus,
+                    'start_date' => $survey->start_date,
+                    'end_date' => $survey->end_date
+                ];
+                
+                $migratedCount++;
+                \Log::info("Migrated survey {$survey->id} from '{$oldStatus}' to '{$newStatus}'");
+            }
+        }
+        
+        return response()->json([
+            'message' => 'Migration completed successfully',
+            'surveys_checked' => $surveys->count(),
+            'surveys_migrated' => $migratedCount,
+            'migrations' => $report
+        ], 200);
+        
+    } catch (\Exception $e) {
+        \Log::error("Error in migrateSurveyStates: " . $e->getMessage());
+        
+        return response()->json([
+            'error' => 'Migration failed',
+            'message' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Actualizar automáticamente los estados de encuestas basándose en fechas
+ * Se ejecuta silenciosamente en cada consulta de encuestas
+ */
+private function updateSurveyStatesAutomatic()
+{
+    try {
+        $surveys = SurveyModel::whereNotNull('start_date')
+                            ->whereNotNull('end_date')
+                            ->where('status', true)
+                            ->get();
+        
+        foreach ($surveys as $survey) {
+            $now = now();
+            $endDate = $survey->end_date;
+            $startDate = $survey->start_date;
+            
+            $shouldBeFinished = $endDate < $now;
+            $shouldBeScheduled = $startDate > $now;
+            
+            $needsUpdate = false;
+            $newStatus = $survey->publication_status;
+            
+            // Determinar el estado correcto
+            if ($shouldBeFinished && $survey->publication_status !== 'finished') {
+                $newStatus = 'finished';
+                $needsUpdate = true;
+            }
+            elseif ($shouldBeScheduled && $survey->publication_status !== 'scheduled') {
+                $newStatus = 'scheduled';
+                $needsUpdate = true;
+            }
+            elseif (!$shouldBeFinished && !$shouldBeScheduled && 
+                    !in_array($survey->publication_status, ['published', 'finished'])) {
+                $newStatus = 'published';
+                $needsUpdate = true;
+            }
+            
+            if ($needsUpdate) {
+                $survey->publication_status = $newStatus;
+                $survey->save();
+                \Log::info("Auto-updated Survey {$survey->id} from '{$survey->getOriginal('publication_status')}' to '{$newStatus}'");
+            }
+        }
+    } catch (\Exception $e) {
+        // Fallar silenciosamente para no interrumpir la consulta principal
+        \Log::error("Error in updateSurveyStatesAutomatic: " . $e->getMessage());
+    }
+}
 }

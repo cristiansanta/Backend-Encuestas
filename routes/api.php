@@ -122,6 +122,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::post('/{id}/repair', 'repairSurveyQuestions')->name('surveys.repairSurveyQuestions');
         // verificar y reparar relaciones
         Route::get('/repair-relations', 'repairSurveyRelations')->name('surveys.repairSurveyRelations');
+        // migrar estados de encuestas basados en fechas
+        Route::post('/migrate-states', 'migrateSurveyStates')->name('surveys.migrateSurveyStates');
 
 
     });
