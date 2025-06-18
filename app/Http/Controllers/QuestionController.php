@@ -16,7 +16,17 @@ class QuestionController extends Controller
      */
     public function index(Request $request)
     {
+        // Obtener el usuario autenticado
+        $user = $request->user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Usuario no autenticado'], 401);
+        }
+        
         $query = QuestionModel::query();
+        
+        // Filtrar por el usuario creador
+        $query->where('creator_id', $user->id);
         
         // Filtrar por banco si se especifica
         if ($request->has('bank')) {
@@ -43,6 +53,13 @@ class QuestionController extends Controller
     }
 public function store(Request $request)
 {
+    // Obtener el usuario autenticado
+    $user = $request->user();
+    
+    if (!$user) {
+        return response()->json(['message' => 'Usuario no autenticado'], 401);
+    }
+    
     // Validar los datos recibidos
     $validator = Validator::make($request->all(), [
         'title' => 'required|string|max:255',        
@@ -51,8 +68,8 @@ public function store(Request $request)
         'cod_padre' => 'required|integer',
         'bank' => 'required|boolean',
         'type_questions_id' => 'required|integer',
-        'creator_id' => 'required|integer',
         'questions_conditions' => 'required|boolean',
+        'mother_answer_condition' => 'nullable|string|max:500',
         'section_id' => 'nullable|integer', // Añadido para soportar secciones       
     ]);
 
@@ -64,6 +81,8 @@ public function store(Request $request)
     }
 
     $data = $request->all();
+    // Asignar automáticamente el creator_id del usuario autenticado
+    $data['creator_id'] = $user->id;
 
     // Buscar y decodificar imágenes en base64 dentro de la descripción
     if (preg_match_all('/<img src="data:image\/[^;]+;base64,([^"]+)"/', $data['descrip'], $matches)) {
@@ -81,15 +100,20 @@ public function store(Request $request)
         }
     }
 
-    // Verificar si ya existe un registro similar
+    // Verificar si ya existe un registro similar para este usuario
     $existingQuestion = QuestionModel::where('title', $data['title'])
                                       ->where('descrip', $data['descrip'])
                                       ->where('type_questions_id', $data['type_questions_id'])
                                       ->where('questions_conditions', $data['questions_conditions'])
+                                      ->where('creator_id', $user->id)
                                       ->first();
 
     if ($existingQuestion) {
-        return response()->json(['message' => 'La pregunta ya fue creada exitosamente'], 201);
+        return response()->json([
+            'id' => $existingQuestion->id,
+            'message' => 'La pregunta ya fue creada exitosamente',
+            'existing' => true
+        ], 201);
     }
 
     try {
@@ -166,6 +190,7 @@ public function store(Request $request)
                     'bank' => 'required|boolean',
                     'type_questions_id' => 'required|integer',
                     'questions_conditions' => 'required|boolean',
+                    'mother_answer_condition' => 'nullable|string|max:500',
                     'section_id' => 'nullable|integer',
                 ]);
     
@@ -177,6 +202,7 @@ public function store(Request $request)
                 $question->bank = $request->bank;
                 $question->type_questions_id = $request->type_questions_id;
                 $question->questions_conditions = $request->questions_conditions;
+                $question->mother_answer_condition = $request->mother_answer_condition;
                 $question->section_id = $request->section_id;
             }
     

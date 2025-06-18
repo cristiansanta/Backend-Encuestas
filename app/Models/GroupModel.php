@@ -17,13 +17,15 @@ class GroupModel extends Model
         'name',
         'description',
         'created_by',
-        'user_count'
+        'user_count',
+        'users_data'
     ];
 
     protected $casts = [
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
-        'user_count' => 'integer'
+        'user_count' => 'integer',
+        'users_data' => 'array' // Cast para manejar arrays de usuarios
     ];
 
     // Relación con usuarios del grupo

@@ -12,6 +12,7 @@ use HTMLPurifier;
 use HTMLPurifier_Config;
 use function PHPSTORM_META\type;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\DB;
 
 
 class SurveyController extends Controller
@@ -19,9 +20,21 @@ class SurveyController extends Controller
     /**
      * Display a listing of the resource.
      */
-    public function index()
+    public function index(Request $request)
     {
-                $surveys = SurveyModel::all();
+        // Obtener el usuario autenticado
+        $user = $request->user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Usuario no autenticado'], 401);
+        }
+        
+        // Actualizar estados de encuestas automáticamente
+        $this->updateSurveyStatesAutomatic();
+        
+        // Filtrar encuestas por el usuario autenticado
+        $surveys = SurveyModel::where('user_create', $user->name)->get();
+        
         return response()->json($surveys); // Cambiado para devolver JSON
         //return view('surveys.index', compact('surveys'));
     }
@@ -51,14 +64,28 @@ class SurveyController extends Controller
 
     public function store(Request $request)
     {
-        // Validar los datos entrantes
-        $validator = Validator::make($request->all(), [
+        // Establecer fechas por defecto si no se proporcionan
+        $data = $request->all();
+        
+        if (empty($data['start_date'])) {
+            $data['start_date'] = now()->format('Y-m-d H:i:s');
+        }
+        
+        if (empty($data['end_date'])) {
+            $tomorrow = now()->addDay();
+            $data['end_date'] = $tomorrow->format('Y-m-d H:i:s');
+        }
+        
+        // Validar los datos entrantes (incluyendo fechas por defecto)
+        $validator = Validator::make($data, [
             'title' => 'required|string|max:255',
             'descrip' => 'nullable|string',
-            'id_category' => 'nullable|integer',
+            'id_category' => 'nullable|integer|exists:categories,id',
             'status' => 'required|boolean',
-            'publication_status' => 'nullable|in:draft,unpublished,published',
+            'publication_status' => 'nullable|in:draft,unpublished,published,finished,scheduled',
             'user_create' => 'required|string',
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date'
         ]);
 
         if ($validator->fails()) {
@@ -67,8 +94,19 @@ class SurveyController extends Controller
                 'details' => $validator->errors(),
             ], 422);
         }
-
-        $data = $request->all();
+        
+        // Validar que no exista otra encuesta con el mismo título para el mismo usuario
+        $existingSurvey = SurveyModel::where('title', $data['title'])
+                                    ->where('user_create', $data['user_create'])
+                                    ->first();
+                                    
+        if ($existingSurvey) {
+            return response()->json([
+                'error' => 'Error de validación',
+                'details' => ['title' => ['Ya existe una encuesta con este nombre']],
+                'message' => 'Ya tienes una encuesta con el mismo nombre. Por favor, elige un nombre diferente.'
+            ], 422);
+        }
 
         // Buscar y decodificar imágenes en base64 dentro de la descripción
         if (preg_match_all('/<img src="data:image\/[^;]+;base64,([^"]+)"/', $data['descrip'], $matches)) {
@@ -161,7 +199,7 @@ class SurveyController extends Controller
             'descrip' => 'nullable|string',
             'id_category' => 'nullable|integer',
             'status' => 'nullable|boolean',
-            'publication_status' => 'nullable|in:draft,unpublished,published',
+            'publication_status' => 'nullable|in:draft,unpublished,published,finished,scheduled',
             'user_create' => 'nullable|string',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:start_date'
@@ -169,6 +207,22 @@ class SurveyController extends Controller
     
         if ($validator->fails()) {
             return response()->json(['message' => 'Error de validación', 'errors' => $validator->errors()], 422);
+        }
+        
+        // Si se está actualizando el título, validar que no exista otra encuesta con el mismo título para el mismo usuario
+        if ($request->has('title') && $request->title !== $survey->title) {
+            $existingSurvey = SurveyModel::where('title', $request->title)
+                                        ->where('user_create', $survey->user_create)
+                                        ->where('id', '!=', $id)
+                                        ->first();
+                                        
+            if ($existingSurvey) {
+                return response()->json([
+                    'message' => 'Error de validación',
+                    'errors' => ['title' => ['Ya existe una encuesta con este nombre']],
+                    'error' => 'Ya tienes una encuesta con el mismo nombre. Por favor, elige un nombre diferente.'
+                ], 422);
+            }
         }
     
         // Actualizar solo los campos proporcionados en la solicitud
@@ -270,8 +324,18 @@ class SurveyController extends Controller
     {
         $survey = SurveyModel::find($id);
         if ($survey) {
-            $surveyQuestions = $survey->surveyQuestions()->with('question')->get();
-            return response()->json($surveyQuestions);
+            $surveyQuestions = $survey->surveyQuestions()->with([
+                'question.type',
+                'question.options'
+            ])->get();
+            return response()->json([
+                'survey_questions' => $surveyQuestions,
+                'survey_info' => [
+                    'id' => $survey->id,
+                    'title' => $survey->title,
+                    'description' => $survey->descrip
+                ]
+            ]);
         } else {
             return response()->json(['message' => 'Survey not found'], 404);
         }
@@ -305,8 +369,23 @@ class SurveyController extends Controller
             return response()->json(['message' => 'Survey not found'], 404);
         }
 
-        // Log información de debug
+        // Log información de debug con detalles de secciones
+        $sectionDetails = $survey->sections->map(function($section) {
+            return "ID: {$section->id}, Title: '{$section->title}', id_survey: {$section->id_survey}";
+        })->toArray();
+        
         \Log::info("getSurveyDetails for survey {$id} - Sections: {$survey->sections->count()}, Questions: {$survey->surveyQuestions->count()}");
+        \Log::info("Section details: " . implode('; ', $sectionDetails));
+
+        // Deduplicar secciones si hay duplicados por título
+        $uniqueSections = $survey->sections->unique(function ($section) {
+            return strtolower(trim($section->title));
+        })->values();
+        
+        if ($uniqueSections->count() !== $survey->sections->count()) {
+            \Log::warning("Detected {$survey->sections->count()} sections but only {$uniqueSections->count()} unique by title for survey {$id}");
+            $survey->setRelation('sections', $uniqueSections);
+        }
 
         // Agregar contadores para debug
         $survey->sections_count = $survey->sections->count();
@@ -315,10 +394,9 @@ class SurveyController extends Controller
 
         // Si no tiene contenido, verificar si hay secciones o preguntas huérfanas
         if (!$survey->has_content) {
-            // Buscar secciones que podrían estar relacionadas pero con id_survey NULL
+            // Buscar secciones que podrían estar relacionadas solo para esta encuesta específica
             $potentialSections = \DB::table('sections')
-                ->whereNull('id_survey')
-                ->orWhere('id_survey', $id)
+                ->where('id_survey', $id)
                 ->get();
 
             // Buscar preguntas que podrían estar relacionadas
@@ -406,25 +484,58 @@ private function updateSurveyStatusBasedOnDates($survey)
     // Calcular días hasta el final
     $daysUntilEnd = $now->diffInDays($endDate, false);
     
+    $newStatus = null;
+    $newPublicationStatus = $survey->publication_status; // Mantener el actual por defecto
+    
     // Si la fecha de fin ya pasó, marcar como finalizada
     if ($endDate < $now) {
-        $survey->survey_status = 'Finalizada';
+        $newStatus = 'Finalizada';
+        $newPublicationStatus = 'finished'; // Nuevo estado para encuestas finalizadas
     }
     // Si faltan 3 días o menos para finalizar
     elseif ($daysUntilEnd <= 3 && $daysUntilEnd >= 0) {
-        $survey->survey_status = 'Próxima a Finalizar';
+        $newStatus = 'Próxima a Finalizar';
+        // Mantener published si ya estaba publicada
+        if ($survey->publication_status === 'published') {
+            $newPublicationStatus = 'published';
+        }
     }
     // Si está dentro del rango de fechas y publicada
     elseif ($startDate <= $now && $now <= $endDate) {
-        $survey->survey_status = 'Activa';
+        $newStatus = 'Activa';
+        // Mantener published si ya estaba publicada
+        if ($survey->publication_status === 'published') {
+            $newPublicationStatus = 'published';
+        }
     }
     // Si aún no ha comenzado
     else {
-        $survey->survey_status = 'Programada';
+        $newStatus = 'Programada';
+        $newPublicationStatus = 'scheduled'; // Nuevo estado para encuestas programadas
     }
     
-    // No guardar en la base de datos, solo actualizar el objeto en memoria
-    // para no afectar el campo status booleano
+    // Actualizar el objeto en memoria para respuesta inmediata
+    $survey->survey_status = $newStatus;
+    
+    // Solo actualizar en base de datos si hay cambios y la encuesta está finalizada
+    // Esto evita múltiples actualizaciones innecesarias pero garantiza que las finalizadas se persistan
+    if ($newStatus === 'Finalizada' && $survey->publication_status !== 'finished') {
+        try {
+            \DB::table('surveys')
+                ->where('id', $survey->id)
+                ->update([
+                    'publication_status' => 'finished',
+                    'updated_at' => now()
+                ]);
+            
+            // Actualizar el objeto en memoria también
+            $survey->publication_status = 'finished';
+            
+            \Log::info("Survey ID {$survey->id} automatically marked as finished due to end date");
+        } catch (\Exception $e) {
+            \Log::error("Failed to update survey status for ID {$survey->id}: " . $e->getMessage());
+        }
+    }
 }
 
 
@@ -483,7 +594,7 @@ private function updateSurveyStatusBasedOnDates($survey)
         }
 
         $validator = Validator::make($request->all(), [
-            'publication_status' => 'required|in:draft,unpublished,published',
+            'publication_status' => 'required|in:draft,unpublished,published,finished,scheduled',
         ]);
 
         if ($validator->fails()) {
@@ -649,6 +760,40 @@ private function updateSurveyStatusBasedOnDates($survey)
     }
 
     /**
+     * Contar respuestas de una encuesta específica
+     */
+    public function getResponsesCount($id)
+    {
+        try {
+            $survey = SurveyModel::find($id);
+            if (!$survey) {
+                return response()->json(['message' => 'Survey not found'], 404);
+            }
+
+            // Contar respuestas desde la tabla notificationsurvays donde se almacenan las respuestas reales
+            $count = \DB::table('notificationsurvays')
+                ->where('id_survey', $id)
+                ->where('state_results', true) // Solo contar respuestas completadas
+                ->whereNotNull('respondent_name') // Asegurar que hay un encuestado válido
+                ->count();
+
+            return response()->json([
+                'survey_id' => $id,
+                'responses_count' => $count
+            ], 200);
+
+        } catch (\Exception $e) {
+            \Log::error("Error counting responses for survey {$id}: " . $e->getMessage());
+            
+            return response()->json([
+                'error' => 'Error counting responses',
+                'message' => $e->getMessage(),
+                'survey_id' => $id
+            ], 500);
+        }
+    }
+
+    /**
      * Verificar y reparar relaciones de encuestas
      */
     public function repairSurveyRelations()
@@ -710,4 +855,285 @@ private function updateSurveyStatusBasedOnDates($survey)
             ], 500);
         }
     }
+
+/**
+ * Migrar estados de encuestas existentes para sincronizar con fechas
+ * Útil para corregir encuestas que tienen publication_status incorrecto
+ */
+public function migrateSurveyStates()
+{
+    try {
+        $surveys = SurveyModel::whereNotNull('start_date')
+                            ->whereNotNull('end_date')
+                            ->where('status', true) // Solo encuestas publicadas
+                            ->get();
+        
+        $migratedCount = 0;
+        $report = [];
+        
+        foreach ($surveys as $survey) {
+            $now = now();
+            $endDate = $survey->end_date;
+            $startDate = $survey->start_date;
+            
+            $shouldBeFinished = $endDate < $now;
+            $shouldBeScheduled = $startDate > $now;
+            
+            $needsUpdate = false;
+            $newStatus = $survey->publication_status;
+            
+            // Si debería estar finalizada pero no lo está
+            if ($shouldBeFinished && $survey->publication_status !== 'finished') {
+                $newStatus = 'finished';
+                $needsUpdate = true;
+            }
+            // Si debería estar programada pero no lo está
+            elseif ($shouldBeScheduled && $survey->publication_status !== 'scheduled') {
+                $newStatus = 'scheduled';
+                $needsUpdate = true;
+            }
+            // Si está en rango y debería estar publicada
+            elseif (!$shouldBeFinished && !$shouldBeScheduled && $survey->publication_status !== 'published') {
+                $newStatus = 'published';
+                $needsUpdate = true;
+            }
+            
+            if ($needsUpdate) {
+                $oldStatus = $survey->publication_status;
+                $survey->publication_status = $newStatus;
+                $survey->save();
+                
+                $report[] = [
+                    'id' => $survey->id,
+                    'title' => $survey->title,
+                    'old_status' => $oldStatus,
+                    'new_status' => $newStatus,
+                    'start_date' => $survey->start_date,
+                    'end_date' => $survey->end_date
+                ];
+                
+                $migratedCount++;
+                \Log::info("Migrated survey {$survey->id} from '{$oldStatus}' to '{$newStatus}'");
+            }
+        }
+        
+        return response()->json([
+            'message' => 'Migration completed successfully',
+            'surveys_checked' => $surveys->count(),
+            'surveys_migrated' => $migratedCount,
+            'migrations' => $report
+        ], 200);
+        
+    } catch (\Exception $e) {
+        \Log::error("Error in migrateSurveyStates: " . $e->getMessage());
+        
+        return response()->json([
+            'error' => 'Migration failed',
+            'message' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Actualizar automáticamente los estados de encuestas basándose en fechas
+ * Se ejecuta silenciosamente en cada consulta de encuestas
+ */
+private function updateSurveyStatesAutomatic()
+{
+    try {
+        $surveys = SurveyModel::whereNotNull('start_date')
+                            ->whereNotNull('end_date')
+                            ->where('status', true)
+                            ->get();
+        
+        foreach ($surveys as $survey) {
+            $now = now();
+            $endDate = $survey->end_date;
+            $startDate = $survey->start_date;
+            
+            $shouldBeFinished = $endDate < $now;
+            $shouldBeScheduled = $startDate > $now;
+            
+            $needsUpdate = false;
+            $newStatus = $survey->publication_status;
+            
+            // Determinar el estado correcto
+            if ($shouldBeFinished && $survey->publication_status !== 'finished') {
+                $newStatus = 'finished';
+                $needsUpdate = true;
+            }
+            elseif ($shouldBeScheduled && $survey->publication_status !== 'scheduled') {
+                $newStatus = 'scheduled';
+                $needsUpdate = true;
+            }
+            elseif (!$shouldBeFinished && !$shouldBeScheduled && 
+                    !in_array($survey->publication_status, ['published', 'finished'])) {
+                $newStatus = 'published';
+                $needsUpdate = true;
+            }
+            
+            if ($needsUpdate) {
+                $survey->publication_status = $newStatus;
+                $survey->save();
+                \Log::info("Auto-updated Survey {$survey->id} from '{$survey->getOriginal('publication_status')}' to '{$newStatus}'");
+            }
+        }
+    } catch (\Exception $e) {
+        // Fallar silenciosamente para no interrumpir la consulta principal
+        \Log::error("Error in updateSurveyStatesAutomatic: " . $e->getMessage());
+    }
+}
+
+/**
+ * Depurar relaciones de encuesta - útil para diagnosticar problemas
+ */
+public function debugRelations($id)
+{
+    try {
+        $survey = SurveyModel::findOrFail($id);
+        
+        // Obtener secciones directamente
+        $sectionsRaw = DB::table('sections')
+            ->where('survey_id', $id)
+            ->get();
+            
+        // Obtener preguntas directamente
+        $questionsRaw = DB::table('questions')
+            ->where('survey_id', $id)
+            ->get();
+            
+        // Obtener relaciones de la tabla pivot
+        $pivotRelations = DB::table('survey_questions')
+            ->where('survey_id', $id)
+            ->get();
+            
+        // Detectar preguntas huérfanas (sin relación en pivot)
+        $orphanQuestions = DB::table('questions')
+            ->where('survey_id', $id)
+            ->whereNotIn('id', function($query) use ($id) {
+                $query->select('question_id')
+                      ->from('survey_questions')
+                      ->where('survey_id', $id);
+            })
+            ->get();
+        
+        $problemDetected = $questionsRaw->count() > 0 && $pivotRelations->count() === 0;
+        
+        return response()->json([
+            'survey_id' => $id,
+            'sections_count' => $sectionsRaw->count(),
+            'questions_count' => $questionsRaw->count(),
+            'pivot_relations_count' => $pivotRelations->count(),
+            'orphan_questions_count' => $orphanQuestions->count(),
+            'problem_detected' => $problemDetected,
+            'sections_raw_query' => $sectionsRaw,
+            'questions_raw_query' => $questionsRaw,
+            'pivot_relations' => $pivotRelations,
+            'orphan_questions' => $orphanQuestions,
+            'analysis' => [
+                'has_sections' => $sectionsRaw->count() > 0,
+                'has_questions' => $questionsRaw->count() > 0,
+                'has_relations' => $pivotRelations->count() > 0,
+                'consistency_issue' => $problemDetected
+            ]
+        ]);
+        
+    } catch (\Exception $e) {
+        return response()->json([
+            'error' => 'Error debugging relations: ' . $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Reparar relaciones faltantes de preguntas en la tabla pivot
+ */
+public function repairQuestions($id)
+{
+    try {
+        $survey = SurveyModel::findOrFail($id);
+        
+        // Obtener todas las secciones de esta encuesta
+        $sections = DB::table('sections')
+            ->where('id_survey', $id)
+            ->get();
+        
+        if ($sections->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'error' => 'La encuesta no tiene secciones. No se pueden reparar preguntas sin secciones.',
+                'questions_repaired' => 0
+            ], 400);
+        }
+        
+        $sectionIds = $sections->pluck('id')->toArray();
+        
+        // Encontrar preguntas que pertenecen a las secciones de esta encuesta 
+        // pero que no están en la tabla pivot survey_questions
+        $orphanQuestions = DB::table('questions')
+            ->whereIn('section_id', $sectionIds)
+            ->whereNotIn('id', function($query) use ($id) {
+                $query->select('question_id')
+                      ->from('survey_questions')
+                      ->where('survey_id', $id);
+            })
+            ->get();
+        
+        $repaired = 0;
+        $errors = [];
+        
+        // Obtener información del usuario autenticado
+        $user = auth()->user();
+        $userId = $user ? $user->id : 1; // Fallback a usuario ID 1 si no hay autenticación
+        $userString = $user ? $user->username ?? $user->email ?? "system" : "system";
+        
+        foreach ($orphanQuestions as $question) {
+            try {
+                // Verificar que la pregunta tenga section_id válido
+                if (!$question->section_id || !in_array($question->section_id, $sectionIds)) {
+                    $errors[] = "Question {$question->id} has invalid section_id {$question->section_id}";
+                    continue;
+                }
+                
+                // Crear la relación faltante en la tabla pivot con todos los campos requeridos
+                DB::table('survey_questions')->insert([
+                    'survey_id' => $id,
+                    'question_id' => $question->id,
+                    'section_id' => $question->section_id,
+                    'creator_id' => $userId,
+                    'status' => true,
+                    'user_id' => $userString,
+                    'created_at' => now(),
+                    'updated_at' => now()
+                ]);
+                
+                $repaired++;
+                \Log::info("Repaired relation for question {$question->id} in survey {$id}, section {$question->section_id}");
+                
+            } catch (\Exception $e) {
+                $errors[] = "Error repairing question {$question->id}: " . $e->getMessage();
+                \Log::error("Error repairing question {$question->id}: " . $e->getMessage());
+            }
+        }
+        
+        return response()->json([
+            'success' => $repaired > 0,
+            'questions_repaired' => $repaired,
+            'total_orphan_questions' => $orphanQuestions->count(),
+            'sections_found' => $sections->count(),
+            'errors' => $errors,
+            'message' => $repaired > 0 
+                ? "Se repararon {$repaired} relaciones de preguntas en {$sections->count()} secciones"
+                : "No se encontraron relaciones que reparar"
+        ]);
+        
+    } catch (\Exception $e) {
+        \Log::error("Error in repairQuestions for survey {$id}: " . $e->getMessage());
+        return response()->json([
+            'success' => false,
+            'error' => 'Error reparando relaciones: ' . $e->getMessage(),
+            'questions_repaired' => 0
+        ], 500);
+    }
+}
 }

@@ -138,21 +138,39 @@ class TemporarySurveyController extends Controller
         $categories = $surveyData['survey_info']['selectedCategory'] ?? null;
 
         if (isset($validated['id'])) {
-            // Update existing
+            // Try to find existing record
             $temporarySurvey = TemporarySurveyModel::where('user_id', Auth::id())
-                ->findOrFail($validated['id']);
+                ->find($validated['id']);
             
-            $temporarySurvey->update([
-                'survey_data' => $surveyData,
-                'title' => $title,
-                'description' => $description,
-                'start_date' => $startDate,
-                'end_date' => $endDate,
-                'sections' => $surveyData['sections'],
-                'questions' => $surveyData['questions'],
-                'categories' => $categories,
-                'last_saved_at' => now()
-            ]);
+            if ($temporarySurvey) {
+                // Update existing
+                $temporarySurvey->update([
+                    'survey_data' => $surveyData,
+                    'title' => $title,
+                    'description' => $description,
+                    'start_date' => $startDate,
+                    'end_date' => $endDate,
+                    'sections' => $surveyData['sections'],
+                    'questions' => $surveyData['questions'],
+                    'categories' => $categories,
+                    'last_saved_at' => now()
+                ]);
+            } else {
+                // ID provided but record not found, create new one
+                $temporarySurvey = TemporarySurveyModel::create([
+                    'user_id' => Auth::id(),
+                    'survey_data' => $surveyData,
+                    'title' => $title,
+                    'description' => $description,
+                    'start_date' => $startDate,
+                    'end_date' => $endDate,
+                    'sections' => $surveyData['sections'],
+                    'questions' => $surveyData['questions'],
+                    'categories' => $categories,
+                    'status' => 'draft',
+                    'last_saved_at' => now()
+                ]);
+            }
         } else {
             // Create new
             $temporarySurvey = TemporarySurveyModel::create([

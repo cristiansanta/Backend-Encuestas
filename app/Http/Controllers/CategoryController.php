@@ -9,10 +9,19 @@ use Illuminate\Support\Facades\Validator;
 class CategoryController extends Controller
 {
     
-    public function index()
+    public function index(Request $request)
     {
-        // Listado de categorías ordenadas de mayor a menor por el campo 'id'
-        $category = CategoryModel::orderBy('id', 'desc')->get();
+        // Obtener el usuario autenticado
+        $user = $request->user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Usuario no autenticado'], 401);
+        }
+        
+        // Listado de categorías del usuario ordenadas de mayor a menor por el campo 'id'
+        $category = CategoryModel::where('user_create', $user->name)
+                                 ->orderBy('id', 'desc')
+                                 ->get();
         return response()->json($category);
     }
 
@@ -26,6 +35,13 @@ class CategoryController extends Controller
   
     public function store(Request $request)
     {
+        // Obtener el usuario autenticado
+        $user = $request->user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Usuario no autenticado'], 401);
+        }
+        
         // Validar los datos recibidos
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
@@ -42,10 +58,12 @@ class CategoryController extends Controller
 
         // Obtener todos los datos validados
         $data = $request->all();
+        $data['user_create'] = $user->name; // Agregar el usuario creador
 
-        // Verificar si ya existe un registro con los mismos datos clave
+        // Verificar si ya existe un registro con los mismos datos clave para este usuario
         $existingCategory = CategoryModel::where('title', $data['title'])
                                          ->where('descrip_cat', $data['descrip_cat'])
+                                         ->where('user_create', $user->name)
                                          ->first();
 
         if ($existingCategory) {

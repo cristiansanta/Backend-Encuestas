@@ -13,7 +13,7 @@ class NotificationSurvaysController extends Controller
         // Validar los parámetros opcionales id_survey y email
         $validatedData = $request->validate([
             'id_survey' => 'integer|nullable',
-            'email' => 'email|nullable',
+            'email' => 'nullable', // Permitir tanto string como array
         ]);
     
         // Construir la consulta en base a los parámetros proporcionados
@@ -24,13 +24,31 @@ class NotificationSurvaysController extends Controller
         }
     
         if ($request->has('email')) {
-            $query->where('email', $validatedData['email']);
+            $email = $validatedData['email'];
+            if (is_array($email)) {
+                // Buscar registros que contengan cualquiera de los correos en el array
+                $query->where(function($q) use ($email) {
+                    foreach ($email as $singleEmail) {
+                        $q->orWhereJsonContains('email', $singleEmail);
+                    }
+                });
+            } else {
+                // Búsqueda tradicional para un solo correo
+                $query->where(function($q) use ($email) {
+                    $q->where('email', $email)
+                      ->orWhereJsonContains('email', $email);
+                });
+            }
         }
     
         // Ejecutar la consulta
         $notificationSurvey = $query->get();
     
-        return response()->json($notificationSurvey);
+        return response()->json([
+            'success' => true,
+            'data' => $notificationSurvey,
+            'count' => $notificationSurvey->count()
+        ]);
     }
     
 
@@ -43,15 +61,33 @@ class NotificationSurvaysController extends Controller
             'state_results' => 'nullable|boolean',
             'date_insert' => 'nullable|date',
             'id_survey' => 'nullable|integer',
-            'email' => 'nullable|string|max:255',
+            'email' => 'nullable', // Permitir tanto string como array
             'expired_date' => 'nullable|date'
         ]);
+
+        // Si email es un array, validar cada correo individualmente
+        if (is_array($validatedData['email'])) {
+            foreach ($validatedData['email'] as $email) {
+                if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    return response()->json(['error' => "Correo inválido: {$email}"], 422);
+                }
+            }
+        } elseif ($validatedData['email'] && !filter_var($validatedData['email'], FILTER_VALIDATE_EMAIL)) {
+            return response()->json(['error' => "Correo inválido: {$validatedData['email']}"], 422);
+        }
 
         // Crear un nuevo registro en la base de datos
         $record = NotificationSurvaysModel::create($validatedData);
 
         // Retornar la respuesta en JSON
-        return response()->json($record, 201);
+        return response()->json([
+            'success' => true,
+            'message' => is_array($validatedData['email']) 
+                ? 'Notificación grupal creada exitosamente con ' . count($validatedData['email']) . ' correos'
+                : 'Notificación individual creada exitosamente',
+            'data' => $record,
+            'email_count' => is_array($validatedData['email']) ? count($validatedData['email']) : 1
+        ], 201);
     }
 
     public function update(Request $request)

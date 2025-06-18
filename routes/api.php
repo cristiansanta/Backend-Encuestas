@@ -21,6 +21,7 @@ use App\Http\Controllers\NotificationSurvaysController;
 use App\Http\Controllers\TemporarySurveyController;
 use App\Http\Controllers\GroupController;
 use App\Http\Controllers\AdminCleanupController;
+use App\Http\Controllers\ManualSurveyResponseController;
 
 
 
@@ -36,6 +37,7 @@ Route::prefix('groups-test')->controller(GroupController::class)->group(function
     Route::get('/', 'index');
     Route::post('/add-user', 'addUser');
     Route::post('/add-users', 'addUsers');
+    Route::put('/update/{id}', 'update'); // Actualizar grupo
     Route::get('/{id}/users', 'getGroupUsers');
     Route::put('/{groupId}/users/{userId}', 'updateUser');
     Route::delete('/{groupId}/users/{userId}', 'deleteUser');
@@ -44,6 +46,7 @@ Route::prefix('groups-test')->controller(GroupController::class)->group(function
 
 // Ruta temporal para testing de notificaciones (sin autenticación)
 Route::post('notification-test/store', [NotificationSurvaysController::class, 'store']);
+
 
 Route::middleware(['auth:sanctum'])->group(function () {
     
@@ -100,7 +103,6 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/{id}', 'show')->name('surveys.show');
         Route::put('/update/{id}', 'update')->name('surveys.update');
         Route::put('/update-publication-status/{id}', 'updatePublicationStatus')->name('surveys.updatePublicationStatus');
-        Route::put('/{id}', 'update')->name('surveys.updateDirect');
         Route::delete('/{id}', 'destroy')->name('surveys.destroy');
         //la encuesta a que seccion pertenece
         Route::get('/{id}/sections', 'showSections')->name('surveys.showSections');
@@ -112,12 +114,19 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/{id}/sections/details', 'getSurveySections')->name('surveys.getSurveySections');
          // obtener una encuesta completa con sus relaciones
         Route::get('/{id}/details', 'getSurveyDetails')->name('surveys.getSurveyDetails');
+        // obtener el conteo de respuestas de una encuesta
+        Route::get('/{id}/responses/count', 'getResponsesCount')->name('surveys.getResponsesCount');
         // debug relaciones de una encuesta
         Route::get('/{id}/debug', 'debugSurveyRelations')->name('surveys.debugSurveyRelations');
         // reparar relaciones de una encuesta específica
         Route::post('/{id}/repair', 'repairSurveyQuestions')->name('surveys.repairSurveyQuestions');
         // verificar y reparar relaciones
         Route::get('/repair-relations', 'repairSurveyRelations')->name('surveys.repairSurveyRelations');
+        // migrar estados de encuestas basados en fechas
+        Route::post('/migrate-states', 'migrateSurveyStates')->name('surveys.migrateSurveyStates');
+        // nuevos endpoints para auto-reparación
+        Route::get('/{id}/debug-relations', 'debugRelations')->name('surveys.debugRelations');
+        Route::post('/{id}/repair-questions', 'repairQuestions')->name('surveys.repairQuestions');
 
 
     });
@@ -263,6 +272,17 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::post('/specific-surveys', 'deleteSpecificSurveys')->name('admin.cleanup.specific-surveys');
         Route::post('/all', 'cleanupAll')->name('admin.cleanup.all');
     });
+
+    // Rutas para respuestas manuales de encuestas
+    Route::prefix('manual-survey-responses')->controller(ManualSurveyResponseController::class)->group(function () {
+        Route::post('/', 'store')->name('manual.survey.responses.store');
+        Route::get('/survey/{surveyId}', 'getResponsesBySurvey')->name('manual.survey.responses.by.survey');
+        Route::get('/', 'getAllResponses')->name('manual.survey.responses.all');
+    });
+
+    // Rutas alternativas para compatibilidad con frontend
+    Route::post('/survey-responses', [ManualSurveyResponseController::class, 'store'])->name('survey.responses.store');
+    Route::get('/surveys/{surveyId}/responses', [ManualSurveyResponseController::class, 'getResponsesBySurvey'])->name('surveys.responses.by.survey');
     
 });
 //ruta con autenticacion quemada en env

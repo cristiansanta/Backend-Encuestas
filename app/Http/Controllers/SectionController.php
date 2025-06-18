@@ -11,11 +11,25 @@ class SectionController extends Controller
     /**
      * Display a listing of the resource.
      */
-    public function index()
+    public function index(Request $request)
     {
         try {
-            // Ordenar las secciones por 'id' en orden descendente y luego por 'title' en orden ascendente
-            $sections = SectionModel::orderBy('id', 'desc')->get();
+            // Obtener el usuario autenticado
+            $user = $request->user();
+            
+            if (!$user) {
+                return response()->json(['message' => 'Usuario no autenticado'], 401);
+            }
+            
+            // Filtrar secciones por encuestas del usuario autenticado
+            $sections = SectionModel::where(function($query) use ($user) {
+                                        $query->whereHas('survey', function($subQuery) use ($user) {
+                                            $subQuery->where('user_create', $user->name);
+                                        })
+                                        ->orWhereNull('id_survey'); // También incluir secciones del banco (sin encuesta específica)
+                                    })
+                                    ->orderBy('id', 'desc')
+                                    ->get();
     
             // Devolver las secciones en formato JSON (arreglo vacío si no hay secciones)
             return response()->json($sections, 200);
@@ -67,25 +81,43 @@ class SectionController extends Controller
 
     // Obtener todos los datos validados
     $data = $request->all();
-    // Verificar si ya existe un registro con los mismos datos clave
-    $query = SectionModel::where('title', $data['title'])
-                         ->where('descrip_sect', $data['descrip_sect']);
-    
-    if (isset($data['id_survey'])) {
-        $query->where('id_survey', $data['id_survey']);
-    } else {
-        $query->whereNull('id_survey');
-    }
+    // MEJORADO: Verificar si ya existe un registro con los mismos datos clave usando lógica más robusta
+    $query = SectionModel::where(function($q) use ($data) {
+                            // Manejar id_survey que puede ser null para secciones banco
+                            if (isset($data['id_survey']) && $data['id_survey'] !== null) {
+                                $q->where('id_survey', $data['id_survey']);
+                            } else {
+                                $q->whereNull('id_survey');
+                            }
+                         })
+                         ->where(function($q) use ($data) {
+                            // Verificar por título exacto o similar
+                            $q->where('title', $data['title'])
+                              ->orWhere('title', 'LIKE', '%' . trim($data['title']) . '%')
+                              ->orWhere('title', 'LIKE', trim($data['title']) . '%')
+                              ->orWhere('title', 'LIKE', '%' . trim($data['title']));
+                         });
     
     $existingsections = $query->first();
 
     if ($existingsections) {
         // Si el registro ya existe, devolver el ID existente para evitar duplicados
         $response = [
-            'message' => 'La seccion ya fue creada exitosamente',
+            'message' => 'La seccion ya fue creada exitosamente (duplicado detectado)',
             'section_id' => $existingsections->id,
-            'already_exists' => true
+            'already_exists' => true,
+            'existing_title' => $existingsections->title,
+            'requested_title' => $data['title']
         ];
+        
+        // Log para debugging
+        \Log::info('Section duplicate detected', [
+            'existing_id' => $existingsections->id,
+            'existing_title' => $existingsections->title,
+            'requested_title' => $data['title'],
+            'survey_id' => $data['id_survey'] ?? null
+        ]);
+        
         return response()->json($response, 200);
     }
 

@@ -72,18 +72,27 @@ class SurveyQuestionsController extends Controller
         if ($existingsq) {
             // Si el registro ya existe, devolver un mensaje indicando que ya fue creado
             $response = [
-                'message' => 'el registro ya fue creada exitosamente',
+                'message' => 'el registro ya fue creada exitosamente (duplicado detectado)',
+                'id' => $existingsq->id,
+                'survey_id' => $existingsq->survey_id,
+                'question_id' => $existingsq->question_id,
+                'section_id' => $existingsq->section_id,
+                'already_exists' => true
             ];
-            return response()->json($response, 201);
+            return response()->json($response, 200);
         }
 
         try {
             // Crear una nueva surveyquestions en la base de datos
-            SurveyquestionsModel::create($data);
-            // Preparar la respuesta
+            $surveyQuestion = SurveyquestionsModel::create($data);
+            
+            // Preparar la respuesta INCLUYENDO EL ID
             $response = [
                 'message' => 'Creado exitosamente',
-                //'category' => $surveyquestions->toArray(),
+                'id' => $surveyQuestion->id,
+                'survey_id' => $surveyQuestion->survey_id,
+                'question_id' => $surveyQuestion->question_id,
+                'section_id' => $surveyQuestion->section_id
             ];
 
             // Devolver la respuesta como JSON

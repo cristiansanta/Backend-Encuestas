@@ -11,7 +11,6 @@ class QuestionModel extends Model
 
     protected $table = "questions";
     protected $fillable = [
-
         'title',
         'descrip',
         'validate',
@@ -20,6 +19,7 @@ class QuestionModel extends Model
         'type_questions_id',
         'creator_id',
         'questions_conditions',
+        'mother_answer_condition',
         'section_id'
      ];
  
