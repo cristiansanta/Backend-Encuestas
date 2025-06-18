@@ -124,6 +124,9 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/repair-relations', 'repairSurveyRelations')->name('surveys.repairSurveyRelations');
         // migrar estados de encuestas basados en fechas
         Route::post('/migrate-states', 'migrateSurveyStates')->name('surveys.migrateSurveyStates');
+        // nuevos endpoints para auto-reparación
+        Route::get('/{id}/debug-relations', 'debugRelations')->name('surveys.debugRelations');
+        Route::post('/{id}/repair-questions', 'repairQuestions')->name('surveys.repairQuestions');
 
 
     });

@@ -109,7 +109,11 @@ public function store(Request $request)
                                       ->first();
 
     if ($existingQuestion) {
-        return response()->json(['message' => 'La pregunta ya fue creada exitosamente'], 201);
+        return response()->json([
+            'id' => $existingQuestion->id,
+            'message' => 'La pregunta ya fue creada exitosamente',
+            'existing' => true
+        ], 201);
     }
 
     try {

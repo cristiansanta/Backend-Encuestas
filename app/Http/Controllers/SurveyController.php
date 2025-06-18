@@ -12,6 +12,7 @@ use HTMLPurifier;
 use HTMLPurifier_Config;
 use function PHPSTORM_META\type;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\DB;
 
 
 class SurveyController extends Controller
@@ -79,7 +80,7 @@ class SurveyController extends Controller
         $validator = Validator::make($data, [
             'title' => 'required|string|max:255',
             'descrip' => 'nullable|string',
-            'id_category' => 'nullable|integer',
+            'id_category' => 'nullable|integer|exists:categories,id',
             'status' => 'required|boolean',
             'publication_status' => 'nullable|in:draft,unpublished,published,finished,scheduled',
             'user_create' => 'required|string',
@@ -368,8 +369,23 @@ class SurveyController extends Controller
             return response()->json(['message' => 'Survey not found'], 404);
         }
 
-        // Log información de debug
+        // Log información de debug con detalles de secciones
+        $sectionDetails = $survey->sections->map(function($section) {
+            return "ID: {$section->id}, Title: '{$section->title}', id_survey: {$section->id_survey}";
+        })->toArray();
+        
         \Log::info("getSurveyDetails for survey {$id} - Sections: {$survey->sections->count()}, Questions: {$survey->surveyQuestions->count()}");
+        \Log::info("Section details: " . implode('; ', $sectionDetails));
+
+        // Deduplicar secciones si hay duplicados por título
+        $uniqueSections = $survey->sections->unique(function ($section) {
+            return strtolower(trim($section->title));
+        })->values();
+        
+        if ($uniqueSections->count() !== $survey->sections->count()) {
+            \Log::warning("Detected {$survey->sections->count()} sections but only {$uniqueSections->count()} unique by title for survey {$id}");
+            $survey->setRelation('sections', $uniqueSections);
+        }
 
         // Agregar contadores para debug
         $survey->sections_count = $survey->sections->count();
@@ -378,10 +394,9 @@ class SurveyController extends Controller
 
         // Si no tiene contenido, verificar si hay secciones o preguntas huérfanas
         if (!$survey->has_content) {
-            // Buscar secciones que podrían estar relacionadas pero con id_survey NULL
+            // Buscar secciones que podrían estar relacionadas solo para esta encuesta específica
             $potentialSections = \DB::table('sections')
-                ->whereNull('id_survey')
-                ->orWhere('id_survey', $id)
+                ->where('id_survey', $id)
                 ->get();
 
             // Buscar preguntas que podrían estar relacionadas
@@ -966,6 +981,159 @@ private function updateSurveyStatesAutomatic()
     } catch (\Exception $e) {
         // Fallar silenciosamente para no interrumpir la consulta principal
         \Log::error("Error in updateSurveyStatesAutomatic: " . $e->getMessage());
+    }
+}
+
+/**
+ * Depurar relaciones de encuesta - útil para diagnosticar problemas
+ */
+public function debugRelations($id)
+{
+    try {
+        $survey = SurveyModel::findOrFail($id);
+        
+        // Obtener secciones directamente
+        $sectionsRaw = DB::table('sections')
+            ->where('survey_id', $id)
+            ->get();
+            
+        // Obtener preguntas directamente
+        $questionsRaw = DB::table('questions')
+            ->where('survey_id', $id)
+            ->get();
+            
+        // Obtener relaciones de la tabla pivot
+        $pivotRelations = DB::table('survey_questions')
+            ->where('survey_id', $id)
+            ->get();
+            
+        // Detectar preguntas huérfanas (sin relación en pivot)
+        $orphanQuestions = DB::table('questions')
+            ->where('survey_id', $id)
+            ->whereNotIn('id', function($query) use ($id) {
+                $query->select('question_id')
+                      ->from('survey_questions')
+                      ->where('survey_id', $id);
+            })
+            ->get();
+        
+        $problemDetected = $questionsRaw->count() > 0 && $pivotRelations->count() === 0;
+        
+        return response()->json([
+            'survey_id' => $id,
+            'sections_count' => $sectionsRaw->count(),
+            'questions_count' => $questionsRaw->count(),
+            'pivot_relations_count' => $pivotRelations->count(),
+            'orphan_questions_count' => $orphanQuestions->count(),
+            'problem_detected' => $problemDetected,
+            'sections_raw_query' => $sectionsRaw,
+            'questions_raw_query' => $questionsRaw,
+            'pivot_relations' => $pivotRelations,
+            'orphan_questions' => $orphanQuestions,
+            'analysis' => [
+                'has_sections' => $sectionsRaw->count() > 0,
+                'has_questions' => $questionsRaw->count() > 0,
+                'has_relations' => $pivotRelations->count() > 0,
+                'consistency_issue' => $problemDetected
+            ]
+        ]);
+        
+    } catch (\Exception $e) {
+        return response()->json([
+            'error' => 'Error debugging relations: ' . $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Reparar relaciones faltantes de preguntas en la tabla pivot
+ */
+public function repairQuestions($id)
+{
+    try {
+        $survey = SurveyModel::findOrFail($id);
+        
+        // Obtener todas las secciones de esta encuesta
+        $sections = DB::table('sections')
+            ->where('id_survey', $id)
+            ->get();
+        
+        if ($sections->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'error' => 'La encuesta no tiene secciones. No se pueden reparar preguntas sin secciones.',
+                'questions_repaired' => 0
+            ], 400);
+        }
+        
+        $sectionIds = $sections->pluck('id')->toArray();
+        
+        // Encontrar preguntas que pertenecen a las secciones de esta encuesta 
+        // pero que no están en la tabla pivot survey_questions
+        $orphanQuestions = DB::table('questions')
+            ->whereIn('section_id', $sectionIds)
+            ->whereNotIn('id', function($query) use ($id) {
+                $query->select('question_id')
+                      ->from('survey_questions')
+                      ->where('survey_id', $id);
+            })
+            ->get();
+        
+        $repaired = 0;
+        $errors = [];
+        
+        // Obtener información del usuario autenticado
+        $user = auth()->user();
+        $userId = $user ? $user->id : 1; // Fallback a usuario ID 1 si no hay autenticación
+        $userString = $user ? $user->username ?? $user->email ?? "system" : "system";
+        
+        foreach ($orphanQuestions as $question) {
+            try {
+                // Verificar que la pregunta tenga section_id válido
+                if (!$question->section_id || !in_array($question->section_id, $sectionIds)) {
+                    $errors[] = "Question {$question->id} has invalid section_id {$question->section_id}";
+                    continue;
+                }
+                
+                // Crear la relación faltante en la tabla pivot con todos los campos requeridos
+                DB::table('survey_questions')->insert([
+                    'survey_id' => $id,
+                    'question_id' => $question->id,
+                    'section_id' => $question->section_id,
+                    'creator_id' => $userId,
+                    'status' => true,
+                    'user_id' => $userString,
+                    'created_at' => now(),
+                    'updated_at' => now()
+                ]);
+                
+                $repaired++;
+                \Log::info("Repaired relation for question {$question->id} in survey {$id}, section {$question->section_id}");
+                
+            } catch (\Exception $e) {
+                $errors[] = "Error repairing question {$question->id}: " . $e->getMessage();
+                \Log::error("Error repairing question {$question->id}: " . $e->getMessage());
+            }
+        }
+        
+        return response()->json([
+            'success' => $repaired > 0,
+            'questions_repaired' => $repaired,
+            'total_orphan_questions' => $orphanQuestions->count(),
+            'sections_found' => $sections->count(),
+            'errors' => $errors,
+            'message' => $repaired > 0 
+                ? "Se repararon {$repaired} relaciones de preguntas en {$sections->count()} secciones"
+                : "No se encontraron relaciones que reparar"
+        ]);
+        
+    } catch (\Exception $e) {
+        \Log::error("Error in repairQuestions for survey {$id}: " . $e->getMessage());
+        return response()->json([
+            'success' => false,
+            'error' => 'Error reparando relaciones: ' . $e->getMessage(),
+            'questions_repaired' => 0
+        ], 500);
     }
 }
 }
