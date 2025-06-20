@@ -172,20 +172,45 @@ class TemporarySurveyController extends Controller
                 ]);
             }
         } else {
-            // Create new
-            $temporarySurvey = TemporarySurveyModel::create([
-                'user_id' => Auth::id(),
-                'survey_data' => $surveyData,
-                'title' => $title,
-                'description' => $description,
-                'start_date' => $startDate,
-                'end_date' => $endDate,
-                'sections' => $surveyData['sections'],
-                'questions' => $surveyData['questions'],
-                'categories' => $categories,
-                'status' => 'draft',
-                'last_saved_at' => now()
-            ]);
+            // Check if there's already a temporary survey with the same title for this user
+            $existingByTitle = null;
+            if ($title) {
+                $existingByTitle = TemporarySurveyModel::where('user_id', Auth::id())
+                    ->where('title', $title)
+                    ->orderBy('last_saved_at', 'desc')
+                    ->first();
+            }
+            
+            if ($existingByTitle) {
+                // Update existing temporary survey with same title
+                $existingByTitle->update([
+                    'survey_data' => $surveyData,
+                    'title' => $title,
+                    'description' => $description,
+                    'start_date' => $startDate,
+                    'end_date' => $endDate,
+                    'sections' => $surveyData['sections'],
+                    'questions' => $surveyData['questions'],
+                    'categories' => $categories,
+                    'last_saved_at' => now()
+                ]);
+                $temporarySurvey = $existingByTitle;
+            } else {
+                // Create new only if no existing survey with same title
+                $temporarySurvey = TemporarySurveyModel::create([
+                    'user_id' => Auth::id(),
+                    'survey_data' => $surveyData,
+                    'title' => $title,
+                    'description' => $description,
+                    'start_date' => $startDate,
+                    'end_date' => $endDate,
+                    'sections' => $surveyData['sections'],
+                    'questions' => $surveyData['questions'],
+                    'categories' => $categories,
+                    'status' => 'draft',
+                    'last_saved_at' => now()
+                ]);
+            }
         }
 
         return response()->json([
