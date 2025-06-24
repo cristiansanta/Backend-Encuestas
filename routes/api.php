@@ -68,6 +68,9 @@ Route::middleware(['auth:sanctum'])->group(function () {
     //asigna los roles  los usuarios //tabla model_has_role
     Route::post('/assign-role', [RoleController::class, 'assignRole']);
     
+    //reasigna rol a usuario existente (para edición)
+    Route::post('/reassign-role', [RoleController::class, 'reassignRole']);
+    
     //asigna los permisos a el rol 
     Route::post('/assign-permission', [RoleController::class, 'assignPermissionsToRole']);
     
