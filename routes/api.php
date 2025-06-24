@@ -63,6 +63,9 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
 
     Route::post('/getTokenByEmail', [AuthController::class, 'getTokenByEmail']);
+    
+    //obtener usuario actual con roles y permisos
+    Route::get('/current-user', [AuthController::class, 'getCurrentUser']);
 
 
     //asigna los roles  los usuarios //tabla model_has_role
