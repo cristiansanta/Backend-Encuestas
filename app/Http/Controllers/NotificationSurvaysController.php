@@ -4,6 +4,10 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\NotificationSurvaysModel;
+use App\Models\SurveyModel;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Str;
+use Carbon\Carbon;
 
 class NotificationSurvaysController extends Controller
 {
@@ -134,6 +138,180 @@ class NotificationSurvaysController extends Controller
             'Pragma' => 'no-cache',
             'Expires' => '0'
         ]);
+    }
+
+    /**
+     * Genera enlaces de encuesta con tokens JWT para envío masivo por correo
+     */
+    public function generateSurveyEmailLinks(Request $request)
+    {
+        try {
+            // Validar los datos entrantes
+            $validatedData = $request->validate([
+                'survey_id' => 'required|integer|exists:surveys,id',
+                'emails' => 'required|array|min:1',
+                'emails.*.email' => 'required|email',
+                'emails.*.name' => 'nullable|string|max:255'
+            ]);
+
+            $surveyId = $validatedData['survey_id'];
+            $emails = $validatedData['emails'];
+
+            // Verificar que la encuesta existe y está activa
+            $survey = SurveyModel::findOrFail($surveyId);
+            
+            if (!$survey->status) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La encuesta no está activa'
+                ], 400);
+            }
+
+            $generatedLinks = [];
+            $errors = [];
+
+            foreach ($emails as $emailData) {
+                try {
+                    // Crear un token único para esta combinación de encuesta y email
+                    $tokenData = [
+                        'survey_id' => $surveyId,
+                        'email' => $emailData['email'],
+                        'respondent_name' => $emailData['name'] ?? null,
+                        'issued_at' => Carbon::now()->timestamp,
+                        'expires_at' => $survey->end_date ? $survey->end_date->timestamp : Carbon::now()->addDays(30)->timestamp,
+                        'unique_id' => Str::uuid()
+                    ];
+
+                    // Cifrar el token con Laravel Crypt
+                    $encryptedToken = Crypt::encrypt($tokenData);
+
+                    // Crear o actualizar el registro de notificación
+                    $notification = NotificationSurvaysModel::updateOrCreate(
+                        [
+                            'id_survey' => $surveyId,
+                            'email' => json_encode([$emailData['email']])
+                        ],
+                        [
+                            'data' => json_encode([
+                                'survey_id' => $surveyId,
+                                'respondent_name' => $emailData['name'],
+                                'type' => 'mass_email_survey_access',
+                                'token_issued_at' => Carbon::now(),
+                                'unique_token' => $tokenData['unique_id']
+                            ]),
+                            'state' => 'pending_response',
+                            'state_results' => false,
+                            'date_insert' => Carbon::now(),
+                            'expired_date' => $survey->end_date ?? Carbon::now()->addDays(30),
+                            'respondent_name' => $emailData['name']
+                        ]
+                    );
+
+                    // Generar la URL de la encuesta
+                    $surveyUrl = config('app.frontend_url', 'http://localhost:3000') . 
+                                '/survey-view-manual/' . $surveyId . 
+                                '?token=' . urlencode($encryptedToken);
+
+                    $generatedLinks[] = [
+                        'email' => $emailData['email'],
+                        'name' => $emailData['name'],
+                        'survey_url' => $surveyUrl,
+                        'encrypted_token' => $encryptedToken,
+                        'notification_id' => $notification->id,
+                        'expires_at' => $survey->end_date ?? Carbon::now()->addDays(30)
+                    ];
+
+                } catch (\Exception $e) {
+                    $errors[] = [
+                        'email' => $emailData['email'],
+                        'error' => $e->getMessage()
+                    ];
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Enlaces de encuesta generados exitosamente',
+                'data' => [
+                    'survey_id' => $surveyId,
+                    'survey_title' => $survey->title,
+                    'generated_links' => $generatedLinks,
+                    'total_generated' => count($generatedLinks),
+                    'errors' => $errors,
+                    'total_errors' => count($errors)
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al generar enlaces de encuesta',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Obtiene el estado de las notificaciones de una encuesta específica
+     */
+    public function getSurveyNotificationStatus(Request $request)
+    {
+        try {
+            $validatedData = $request->validate([
+                'survey_id' => 'required|integer|exists:surveys,id'
+            ]);
+
+            $surveyId = $validatedData['survey_id'];
+
+            // Obtener todas las notificaciones de la encuesta
+            $notifications = NotificationSurvaysModel::where('id_survey', $surveyId)
+                ->with('survey')
+                ->get();
+
+            $statusSummary = [
+                'total_notifications' => $notifications->count(),
+                'pending_responses' => 0,
+                'completed_responses' => 0,
+                'expired_links' => 0,
+                'notifications' => []
+            ];
+
+            foreach ($notifications as $notification) {
+                $isExpired = $notification->expired_date && Carbon::now()->isAfter($notification->expired_date);
+                $hasResponded = $notification->state_results && !empty($notification->response_data);
+                
+                if ($isExpired) {
+                    $statusSummary['expired_links']++;
+                } elseif ($hasResponded) {
+                    $statusSummary['completed_responses']++;
+                } else {
+                    $statusSummary['pending_responses']++;
+                }
+
+                $statusSummary['notifications'][] = [
+                    'id' => $notification->id,
+                    'emails' => $notification->email,
+                    'respondent_name' => $notification->respondent_name,
+                    'has_responded' => $hasResponded,
+                    'is_expired' => $isExpired,
+                    'response_date' => $hasResponded ? $notification->date_insert : null,
+                    'expired_date' => $notification->expired_date,
+                    'state' => $notification->state
+                ];
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $statusSummary
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener estado de notificaciones',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
     
 }

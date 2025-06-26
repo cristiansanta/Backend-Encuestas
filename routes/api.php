@@ -22,6 +22,7 @@ use App\Http\Controllers\TemporarySurveyController;
 use App\Http\Controllers\GroupController;
 use App\Http\Controllers\AdminCleanupController;
 use App\Http\Controllers\ManualSurveyResponseController;
+use App\Http\Controllers\SurveyEmailController;
 
 
 
@@ -46,6 +47,19 @@ Route::prefix('groups-test')->controller(GroupController::class)->group(function
 
 // Ruta temporal para testing de notificaciones (sin autenticación)
 Route::post('notification-test/store', [NotificationSurvaysController::class, 'store']);
+
+// Rutas públicas para acceso a encuestas por correo (sin autenticación)
+Route::prefix('survey-email')->controller(SurveyEmailController::class)->group(function () {
+    Route::post('/validate-access', 'validateSurveyAccess')->name('survey.email.validate');
+    Route::post('/submit-response', 'submitSurveyResponse')->name('survey.email.submit');
+    Route::post('/check-status', 'checkResponseStatus')->name('survey.email.status');
+});
+
+// Rutas públicas para respuestas manuales con validación de token
+Route::prefix('manual-survey')->controller(ManualSurveyResponseController::class)->group(function () {
+    Route::post('/validate-access', 'validateEmailSurveyAccess')->name('manual.survey.validate');
+    Route::post('/submit-with-token', 'storeWithTokenValidation')->name('manual.survey.submit.token');
+});
 
 
 Route::middleware(['auth:sanctum'])->group(function () {
@@ -143,7 +157,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::post('/store', 'store')->name('Notification.store');
         Route::put('/{id}', 'update')->name('Notification.update');
         Route::get('/download', 'download')->name('Notification.download');
-  
+        Route::post('/generate-email-links', 'generateSurveyEmailLinks')->name('Notification.generateEmailLinks');
+        Route::post('/survey-status', 'getSurveyNotificationStatus')->name('Notification.surveyStatus');
     });
 
 
@@ -289,6 +304,11 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // Rutas alternativas para compatibilidad con frontend
     Route::post('/survey-responses', [ManualSurveyResponseController::class, 'store'])->name('survey.responses.store');
     Route::get('/surveys/{surveyId}/responses', [ManualSurveyResponseController::class, 'getResponsesBySurvey'])->name('surveys.responses.by.survey');
+    
+    // Rutas protegidas para gestión de encuestas por correo
+    Route::prefix('survey-email')->controller(SurveyEmailController::class)->group(function () {
+        Route::post('/generate-link', 'generateSurveyLink')->name('survey.email.generate');
+    });
     
 });
 //ruta con autenticacion quemada en env

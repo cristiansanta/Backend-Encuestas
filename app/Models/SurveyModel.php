@@ -51,9 +51,16 @@ class SurveyModel extends Model
      {
          return $this->hasMany(SurveyquestionsModel::class, 'survey_id');
      }
+     
      public function assignment()
     {
         return $this->belongsTo(AssignmentModel::class);
+    }
+
+    // Relación con notificaciones de encuestas
+    public function notifications()
+    {
+        return $this->hasMany(NotificationSurvaysModel::class, 'id_survey');
     }
 
      // Evento deleting para eliminar en cascada
