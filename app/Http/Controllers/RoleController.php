@@ -34,8 +34,8 @@ class RoleController extends Controller
         }
     
         try {
-            // Asignar el rol al usuario
-            $user->assignRole($validated['role']);
+            // Remover roles anteriores y asignar el nuevo rol
+            $user->syncRoles([$validated['role']]);
         } catch (\Spatie\Permission\Exceptions\RoleDoesNotExist $e) {
             // Captura la excepción si el rol no existe
             return response()->json(['error' => 'Role not found'], 404);
@@ -46,6 +46,34 @@ class RoleController extends Controller
     
         // Si todo va bien, retornar el éxito
         return response()->json(['message' => 'Role assigned successfully'], 200);
+    }
+
+    // Reassign role to user (for editing existing users)
+    public function reassignRole(Request $request)
+    {
+        try {
+            $validated = $request->validate([
+                'user_id' => 'required|exists:users,id',
+                'role' => 'required|exists:roles,name',
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json(['error' => 'Validation failed', 'details' => $e->errors()], 422);
+        }
+
+        try {
+            $user = User::findOrFail($validated['user_id']);
+            
+            // Remove all existing roles and assign the new one
+            $user->syncRoles([$validated['role']]);
+            
+            return response()->json([
+                'message' => 'Role reassigned successfully',
+                'user_id' => $user->id,
+                'new_role' => $validated['role']
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'An unexpected error occurred', 'details' => $e->getMessage()], 500);
+        }
     }
 
   

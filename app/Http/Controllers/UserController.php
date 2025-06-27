@@ -35,16 +35,20 @@ class UserController extends Controller
     
         try {
             // Creación del usuario
-            $user = new User();
-            $user->name = $request->name;
-            $user->email = $request->email;
-            $user->password = Hash::make($request->password);
-            $user->save();
+            $user = User::create([
+                'name' => $request->name,
+                'email' => $request->email,
+                'password' => Hash::make($request->password),
+                'active' => true, // Por defecto activo
+            ]);
     
-            return response()->json($user, 201);
+            return response()->json(['user' => $user, 'message' => 'Usuario creado exitosamente'], 201);
         } catch (\Exception $e) {
-            // Manejo de errores
-            return response()->json(['error' => 'Error al crear el usuario. Intenta nuevamente.'], 500);
+            // Manejo de errores con detalles para debug
+            return response()->json([
+                'error' => 'Error al crear el usuario. Intenta nuevamente.',
+                'details' => $e->getMessage()
+            ], 500);
         }
     }    public function show(string $id)
     {

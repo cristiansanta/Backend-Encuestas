@@ -5,7 +5,9 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\NotificationSurvaysModel;
 use App\Models\SurveyAnswersModel;
+use App\Models\SurveyModel;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Crypt;
 use Carbon\Carbon;
 
 class ManualSurveyResponseController extends Controller
@@ -173,6 +175,234 @@ class ManualSurveyResponseController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Error al obtener respuestas',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Valida el acceso y obtiene datos de la encuesta para respuesta por email
+     */
+    public function validateEmailSurveyAccess(Request $request)
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'survey_id' => 'required|integer',
+                'token' => 'nullable|string'
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Datos de validación incorrectos',
+                    'errors' => $validator->errors()
+                ], 400);
+            }
+
+            $surveyId = $request->input('survey_id');
+            $token = $request->input('token');
+
+            // Verificar que la encuesta existe
+            $survey = SurveyModel::with(['sections', 'surveyQuestions'])->find($surveyId);
+            if (!$survey) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Encuesta no encontrada'
+                ], 404);
+            }
+
+            // Si hay token, validarlo
+            $tokenData = null;
+            if ($token) {
+                try {
+                    $tokenData = Crypt::decrypt($token);
+                    
+                    // Verificar que el token corresponde a esta encuesta
+                    if ($tokenData['survey_id'] != $surveyId) {
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'Token no válido para esta encuesta'
+                        ], 401);
+                    }
+
+                    // Verificar fecha de expiración del token
+                    if (Carbon::createFromTimestamp($tokenData['expires_at'])->isPast()) {
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'El enlace de la encuesta ha expirado',
+                            'expired' => true
+                        ], 401);
+                    }
+
+                    // Verificar si ya se respondió la encuesta
+                    $notification = NotificationSurvaysModel::where('id_survey', $surveyId)
+                        ->whereJsonContains('email', $tokenData['email'])
+                        ->where('state_results', true)
+                        ->whereNotNull('response_data')
+                        ->first();
+
+                    if ($notification) {
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'Ya has respondido esta encuesta',
+                            'already_responded' => true
+                        ], 409);
+                    }
+
+                } catch (\Exception $e) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Token inválido o corrupto'
+                    ], 401);
+                }
+            }
+
+            // Verificar estado de la encuesta
+            if (!$survey->status) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La encuesta no está activa'
+                ], 400);
+            }
+
+            // Verificar fechas de la encuesta
+            $now = Carbon::now();
+            if ($survey->start_date && $now->isBefore($survey->start_date)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La encuesta aún no ha comenzado'
+                ], 401);
+            }
+
+            if ($survey->end_date && $now->isAfter($survey->end_date)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La encuesta ha finalizado',
+                    'expired' => true
+                ], 401);
+            }
+
+            // Preparar respuesta con datos de la encuesta
+            $responseData = [
+                'survey_id' => $surveyId,
+                'survey_title' => $survey->title,
+                'survey_description' => $survey->descrip,
+                'survey_status' => $survey->status,
+                'start_date' => $survey->start_date,
+                'end_date' => $survey->end_date,
+                'sections_count' => $survey->sections()->count(),
+                'questions_count' => $survey->surveyQuestions()->count()
+            ];
+
+            // Si hay token, agregar información del destinatario
+            if ($tokenData) {
+                $responseData['respondent_email'] = $tokenData['email'];
+                $responseData['respondent_name'] = $tokenData['respondent_name'];
+                $responseData['token_expires_at'] = Carbon::createFromTimestamp($tokenData['expires_at'])->toISOString();
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Acceso validado correctamente',
+                'data' => $responseData
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al validar acceso a encuesta',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Método mejorado para guardar respuestas con validación de token
+     */
+    public function storeWithTokenValidation(Request $request)
+    {
+        try {
+            // Validar los datos de entrada
+            $validator = Validator::make($request->all(), [
+                'survey_id' => 'required|integer',
+                'respondent_name' => 'required|string|max:255',
+                'respondent_email' => 'required|email|max:255',
+                'responses' => 'required',
+                'token' => 'nullable|string',
+                'status' => 'string|max:50'
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Datos de validación incorrectos',
+                    'errors' => $validator->errors()
+                ], 400);
+            }
+
+            $data = $validator->validated();
+
+            // Si hay token, validar el acceso primero
+            if (!empty($data['token'])) {
+                $accessValidation = $this->validateEmailSurveyAccess($request);
+                if ($accessValidation->getStatusCode() !== 200) {
+                    return $accessValidation;
+                }
+            }
+
+            // Verificar que no exista ya una respuesta para esta combinación
+            $existingResponse = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
+                ->whereJsonContains('email', $data['respondent_email'])
+                ->where('state_results', true)
+                ->whereNotNull('response_data')
+                ->first();
+
+            if ($existingResponse) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Ya existe una respuesta para esta encuesta y email',
+                    'already_responded' => true
+                ], 409);
+            }
+
+            // Crear o actualizar registro en notificationsurvays
+            $notification = NotificationSurvaysModel::updateOrCreate(
+                [
+                    'id_survey' => $data['survey_id'],
+                    'email' => json_encode([$data['respondent_email']])
+                ],
+                [
+                    'data' => json_encode([
+                        'survey_id' => $data['survey_id'],
+                        'respondent_name' => $data['respondent_name'],
+                        'type' => !empty($data['token']) ? 'email_survey_response' : 'manual_response',
+                        'submitted_at' => Carbon::now()
+                    ]),
+                    'state' => 'completed',
+                    'state_results' => true,
+                    'date_insert' => Carbon::now(),
+                    'expired_date' => Carbon::now()->addDays(30),
+                    'respondent_name' => $data['respondent_name'],
+                    'response_data' => $data['responses']
+                ]
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => '¡Respuesta guardada exitosamente! Gracias por participar en la encuesta.',
+                'data' => [
+                    'notification_id' => $notification->id,
+                    'survey_id' => $data['survey_id'],
+                    'respondent_name' => $data['respondent_name'],
+                    'respondent_email' => $data['respondent_email'],
+                    'submitted_at' => Carbon::now()->toISOString()
+                ]
+            ], 201);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al guardar la respuesta',
                 'error' => $e->getMessage()
             ], 500);
         }

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\SectionModel;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\DB;
 
 class SectionController extends Controller
 {
@@ -81,59 +82,61 @@ class SectionController extends Controller
 
     // Obtener todos los datos validados
     $data = $request->all();
-    // MEJORADO: Verificar si ya existe un registro con los mismos datos clave usando lógica más robusta
-    $query = SectionModel::where(function($q) use ($data) {
-                            // Manejar id_survey que puede ser null para secciones banco
-                            if (isset($data['id_survey']) && $data['id_survey'] !== null) {
-                                $q->where('id_survey', $data['id_survey']);
-                            } else {
-                                $q->whereNull('id_survey');
-                            }
-                         })
-                         ->where(function($q) use ($data) {
-                            // Verificar por título exacto o similar
-                            $q->where('title', $data['title'])
-                              ->orWhere('title', 'LIKE', '%' . trim($data['title']) . '%')
-                              ->orWhere('title', 'LIKE', trim($data['title']) . '%')
-                              ->orWhere('title', 'LIKE', '%' . trim($data['title']));
-                         });
     
-    $existingsections = $query->first();
-
-    if ($existingsections) {
-        // Si el registro ya existe, devolver el ID existente para evitar duplicados
-        $response = [
-            'message' => 'La seccion ya fue creada exitosamente (duplicado detectado)',
-            'section_id' => $existingsections->id,
-            'already_exists' => true,
-            'existing_title' => $existingsections->title,
-            'requested_title' => $data['title']
-        ];
-        
-        // Log para debugging
-        \Log::info('Section duplicate detected', [
-            'existing_id' => $existingsections->id,
-            'existing_title' => $existingsections->title,
-            'requested_title' => $data['title'],
-            'survey_id' => $data['id_survey'] ?? null
-        ]);
-        
-        return response()->json($response, 200);
-    }
-
     try {
-        // Crear una nueva sections en la base de datos
-        $section = SectionModel::create($data);
+        // Usar transacción para evitar problemas de concurrencia
+        return DB::transaction(function () use ($data) {
+            // MEJORADO: Verificar si ya existe un registro con los mismos datos clave usando lógica más robusta
+            $query = SectionModel::where(function($q) use ($data) {
+                                    // Manejar id_survey que puede ser null para secciones banco
+                                    if (isset($data['id_survey']) && $data['id_survey'] !== null) {
+                                        $q->where('id_survey', $data['id_survey']);
+                                    } else {
+                                        $q->whereNull('id_survey');
+                                    }
+                                 })
+                                 ->where(function($q) use ($data) {
+                                    // Verificar solo por título exacto para evitar falsos positivos
+                                    $q->where('title', trim($data['title']));
+                                 })
+                                 ->lockForUpdate(); // Bloquear para evitar inserciones simultáneas
+            
+            $existingsections = $query->first();
 
-        // Preparar la respuesta
-        $response = [
-            'message' => 'Seccion fue creada exitosamente',
-            'section_id' => $section->id, 
-            //'question' => $question->toArray(),
-        ];
+            if ($existingsections) {
+                // Si el registro ya existe, devolver el ID existente para evitar duplicados
+                $response = [
+                    'message' => 'La seccion ya fue creada exitosamente (duplicado detectado)',
+                    'section_id' => $existingsections->id,
+                    'already_exists' => true,
+                    'existing_title' => $existingsections->title,
+                    'requested_title' => $data['title']
+                ];
+                
+                // Log para debugging
+                \Log::info('Section duplicate detected', [
+                    'existing_id' => $existingsections->id,
+                    'existing_title' => $existingsections->title,
+                    'requested_title' => $data['title'],
+                    'survey_id' => $data['id_survey'] ?? null
+                ]);
+                
+                return response()->json($response, 200);
+            }
 
-        // Devolver la respuesta como JSON
-        return response()->json($response, 200);
+            // Crear una nueva sections en la base de datos
+            $section = SectionModel::create($data);
+
+            // Preparar la respuesta
+            $response = [
+                'message' => 'Seccion fue creada exitosamente',
+                'section_id' => $section->id, 
+                //'question' => $question->toArray(),
+            ];
+
+            // Devolver la respuesta como JSON
+            return response()->json($response, 200);
+        });
     } catch (\Exception $e) {
         // Capturar cualquier excepción y devolver un error 500
         return response()->json(['error' => 'Error al crear la sección', 'details' => $e->getMessage()], 500);
@@ -244,14 +247,21 @@ class SectionController extends Controller
 {
     try {
         // Obtener todas las secciones relacionadas con el id_survey
-        $sections = SectionModel::where('id_survey', $id_survey)->get();
+        $sections = SectionModel::where('id_survey', $id_survey)
+                                ->orderBy('id')
+                                ->get();
 
-        // Verificar si se encontraron secciones
-        if ($sections->isEmpty()) {
-            return response()->json(['message' => 'No se encontraron secciones para esta encuesta'], 404);
+        // MEJORADO: Log de debug para rastrear consultas
+        \Log::info("getSectionsBySurvey - Survey ID: {$id_survey}, Sections found: {$sections->count()}");
+        
+        if ($sections->count() > 0) {
+            $sectionDetails = $sections->map(function($section) {
+                return "ID: {$section->id}, Title: '{$section->title}', id_survey: {$section->id_survey}";
+            })->toArray();
+            \Log::info("Section details: " . implode('; ', $sectionDetails));
         }
 
-        // Devolver las secciones filtradas en formato JSON
+        // MEJORADO: Siempre devolver las secciones, aunque esté vacío (para evitar error 404 en frontend)
         return response()->json($sections, 200);
     } catch (\Illuminate\Database\QueryException $e) {
         // Manejar errores de consulta

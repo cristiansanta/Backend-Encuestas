@@ -172,20 +172,97 @@ class TemporarySurveyController extends Controller
                 ]);
             }
         } else {
-            // Create new
-            $temporarySurvey = TemporarySurveyModel::create([
-                'user_id' => Auth::id(),
-                'survey_data' => $surveyData,
-                'title' => $title,
-                'description' => $description,
-                'start_date' => $startDate,
-                'end_date' => $endDate,
-                'sections' => $surveyData['sections'],
-                'questions' => $surveyData['questions'],
-                'categories' => $categories,
-                'status' => 'draft',
-                'last_saved_at' => now()
-            ]);
+            // MEJORADO: Lógica más robusta para evitar múltiples borradores
+            
+            // Estrategia 1: Buscar el borrador más reciente del usuario (última sesión de edición)
+            $mostRecentDraft = TemporarySurveyModel::where('user_id', Auth::id())
+                ->where('status', 'draft')
+                ->orderBy('last_saved_at', 'desc')
+                ->first();
+            
+            // Estrategia 2: Si hay datos de sección o pregunta específicos, usar esos para identificar
+            $sectionsData = $surveyData['sections'] ?? [];
+            $questionsData = $surveyData['questions'] ?? [];
+            
+            $existingByContent = null;
+            
+            // Si tenemos un borrador reciente y el contenido parece similar, actualizarlo
+            if ($mostRecentDraft) {
+                $timeDifference = now()->diffInMinutes($mostRecentDraft->last_saved_at);
+                
+                // Si el último borrador fue modificado en las últimas 2 horas, considerar que es la misma sesión
+                if ($timeDifference <= 120) {
+                    \Log::info('Auto-save: Found recent draft within 2 hours, updating it', [
+                        'draft_id' => $mostRecentDraft->id,
+                        'minutes_ago' => $timeDifference,
+                        'old_title' => $mostRecentDraft->title,
+                        'new_title' => $title
+                    ]);
+                    
+                    $existingByContent = $mostRecentDraft;
+                }
+            }
+            
+            // Estrategia 3: Si no hay borrador reciente, buscar por contenido similar
+            if (!$existingByContent && $title) {
+                $existingByContent = TemporarySurveyModel::where('user_id', Auth::id())
+                    ->where('status', 'draft')
+                    ->where(function($query) use ($title) {
+                        $query->where('title', $title)
+                              ->orWhere('title', 'LIKE', '%' . substr($title, 0, 20) . '%');
+                    })
+                    ->orderBy('last_saved_at', 'desc')
+                    ->first();
+            }
+            
+            if ($existingByContent) {
+                // Actualizar borrador existente
+                $existingByContent->update([
+                    'survey_data' => $surveyData,
+                    'title' => $title,
+                    'description' => $description,
+                    'start_date' => $startDate,
+                    'end_date' => $endDate,
+                    'sections' => $surveyData['sections'],
+                    'questions' => $surveyData['questions'],
+                    'categories' => $categories,
+                    'last_saved_at' => now()
+                ]);
+                
+                \Log::info('Auto-save: Updated existing draft', [
+                    'draft_id' => $existingByContent->id,
+                    'title' => $title
+                ]);
+                
+                $temporarySurvey = $existingByContent;
+                
+                // LIMPIEZA: Eliminar otros borradores antiguos del mismo usuario para evitar acumulación
+                $this->cleanupOldDrafts(Auth::id(), $existingByContent->id);
+                
+            } else {
+                // Crear nuevo borrador solo si no encontramos ninguno apropiado
+                $temporarySurvey = TemporarySurveyModel::create([
+                    'user_id' => Auth::id(),
+                    'survey_data' => $surveyData,
+                    'title' => $title,
+                    'description' => $description,
+                    'start_date' => $startDate,
+                    'end_date' => $endDate,
+                    'sections' => $surveyData['sections'],
+                    'questions' => $surveyData['questions'],
+                    'categories' => $categories,
+                    'status' => 'draft',
+                    'last_saved_at' => now()
+                ]);
+                
+                \Log::info('Auto-save: Created new draft', [
+                    'draft_id' => $temporarySurvey->id,
+                    'title' => $title
+                ]);
+                
+                // LIMPIEZA: Mantener solo los últimos 3 borradores del usuario
+                $this->cleanupOldDrafts(Auth::id(), $temporarySurvey->id, 3);
+            }
         }
 
         return response()->json([
@@ -193,5 +270,47 @@ class TemporarySurveyController extends Controller
             'message' => 'Auto-guardado exitoso',
             'data' => $temporarySurvey
         ]);
+    }
+
+    /**
+     * Limpiar borradores antiguos para evitar acumulación
+     */
+    private function cleanupOldDrafts($userId, $keepId, $maxDrafts = 5)
+    {
+        try {
+            // Contar borradores actuales del usuario
+            $totalDrafts = TemporarySurveyModel::where('user_id', $userId)
+                ->where('status', 'draft')
+                ->count();
+
+            if ($totalDrafts <= $maxDrafts) {
+                return; // No necesita limpieza
+            }
+
+            // Obtener borradores antiguos (excluyendo el que queremos mantener)
+            $oldDrafts = TemporarySurveyModel::where('user_id', $userId)
+                ->where('status', 'draft')
+                ->where('id', '!=', $keepId)
+                ->orderBy('last_saved_at', 'asc')
+                ->take($totalDrafts - $maxDrafts)
+                ->get();
+
+            $deletedCount = 0;
+            foreach ($oldDrafts as $draft) {
+                // Solo eliminar borradores que sean más antiguos que 24 horas
+                $hoursOld = now()->diffInHours($draft->last_saved_at);
+                if ($hoursOld >= 24) {
+                    $draft->delete();
+                    $deletedCount++;
+                }
+            }
+
+            if ($deletedCount > 0) {
+                \Log::info("Cleanup: Deleted {$deletedCount} old drafts for user {$userId}");
+            }
+
+        } catch (\Exception $e) {
+            \Log::error('Error during draft cleanup: ' . $e->getMessage());
+        }
     }
 }
