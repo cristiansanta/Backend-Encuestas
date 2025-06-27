@@ -247,14 +247,21 @@ class SectionController extends Controller
 {
     try {
         // Obtener todas las secciones relacionadas con el id_survey
-        $sections = SectionModel::where('id_survey', $id_survey)->get();
+        $sections = SectionModel::where('id_survey', $id_survey)
+                                ->orderBy('id')
+                                ->get();
 
-        // Verificar si se encontraron secciones
-        if ($sections->isEmpty()) {
-            return response()->json(['message' => 'No se encontraron secciones para esta encuesta'], 404);
+        // MEJORADO: Log de debug para rastrear consultas
+        \Log::info("getSectionsBySurvey - Survey ID: {$id_survey}, Sections found: {$sections->count()}");
+        
+        if ($sections->count() > 0) {
+            $sectionDetails = $sections->map(function($section) {
+                return "ID: {$section->id}, Title: '{$section->title}', id_survey: {$section->id_survey}";
+            })->toArray();
+            \Log::info("Section details: " . implode('; ', $sectionDetails));
         }
 
-        // Devolver las secciones filtradas en formato JSON
+        // MEJORADO: Siempre devolver las secciones, aunque esté vacío (para evitar error 404 en frontend)
         return response()->json($sections, 200);
     } catch (\Illuminate\Database\QueryException $e) {
         // Manejar errores de consulta

@@ -359,10 +359,13 @@ class SurveyController extends Controller
     try {
         $survey = SurveyModel::with([
             'category',
-            'sections',
+            'sections' => function($query) {
+                $query->orderBy('id');
+            },
             'surveyQuestions.question.type',
             'surveyQuestions.question.options',
-            'surveyQuestions.question.conditions'
+            'surveyQuestions.question.conditions',
+            'surveyQuestions.section'
         ])->find($id);
 
         if (!$survey) {
@@ -392,23 +395,71 @@ class SurveyController extends Controller
         $survey->questions_count = $survey->surveyQuestions->count();
         $survey->has_content = $survey->sections->count() > 0 || $survey->surveyQuestions->count() > 0;
 
-        // Si no tiene contenido, verificar si hay secciones o preguntas huérfanas
-        if (!$survey->has_content) {
+        // Si no tiene contenido, verificar si hay secciones o preguntas huérfanas y reparar automáticamente
+        if (!$survey->has_content || $survey->sections->count() === 0 || $survey->surveyQuestions->count() === 0) {
+            \Log::info("getSurveyDetails - Detecting potential data integrity issues for survey {$id}");
+            
             // Buscar secciones que podrían estar relacionadas solo para esta encuesta específica
             $potentialSections = \DB::table('sections')
                 ->where('id_survey', $id)
                 ->get();
 
-            // Buscar preguntas que podrían estar relacionadas
-            $potentialQuestions = \DB::table('survey_questions')
-                ->where('survey_id', $id)
-                ->get();
+            // Buscar preguntas que podrían estar relacionadas vía secciones
+            $orphanQuestions = collect();
+            if ($potentialSections->count() > 0) {
+                $sectionIds = $potentialSections->pluck('id')->toArray();
+                $orphanQuestions = \DB::table('questions')
+                    ->whereIn('section_id', $sectionIds)
+                    ->whereNotIn('id', function($query) use ($id) {
+                        $query->select('question_id')
+                              ->from('survey_questions')
+                              ->where('survey_id', $id);
+                    })
+                    ->get();
+            }
 
             $survey->debug_info = [
                 'potential_sections' => $potentialSections->count(),
-                'potential_questions' => $potentialQuestions->count(),
-                'suggestion' => 'Consider running /surveys/repair-relations to fix orphaned relations'
+                'orphan_questions' => $orphanQuestions->count(),
+                'auto_repair_available' => $orphanQuestions->count() > 0,
+                'suggestion' => $orphanQuestions->count() > 0 
+                    ? 'Auto-repairing survey relations...' 
+                    : 'No orphaned relations detected'
             ];
+            
+            // Auto-reparación si hay preguntas huérfanas
+            if ($orphanQuestions->count() > 0) {
+                \Log::info("getSurveyDetails - Auto-repairing {$orphanQuestions->count()} orphan questions for survey {$id}");
+                
+                $repairedCount = 0;
+                foreach ($orphanQuestions as $question) {
+                    try {
+                        \DB::table('survey_questions')->insert([
+                            'survey_id' => $id,
+                            'question_id' => $question->id,
+                            'section_id' => $question->section_id,
+                            'creator_id' => 1,
+                            'status' => true,
+                            'user_id' => 1,
+                            'created_at' => now(),
+                            'updated_at' => now()
+                        ]);
+                        $repairedCount++;
+                    } catch (\Exception $e) {
+                        \Log::warning("Failed to repair question {$question->id}: " . $e->getMessage());
+                    }
+                }
+                
+                if ($repairedCount > 0) {
+                    \Log::info("getSurveyDetails - Successfully auto-repaired {$repairedCount} questions for survey {$id}");
+                    $survey->debug_info['auto_repaired_questions'] = $repairedCount;
+                    
+                    // Recargar las relaciones después de la reparación
+                    $survey->load(['surveyQuestions.question.type', 'surveyQuestions.question.options', 'surveyQuestions.section']);
+                    $survey->questions_count = $survey->surveyQuestions->count();
+                    $survey->has_content = $survey->sections->count() > 0 || $survey->surveyQuestions->count() > 0;
+                }
+            }
         }
 
         return response()->json($survey);
@@ -994,12 +1045,14 @@ public function debugRelations($id)
         
         // Obtener secciones directamente
         $sectionsRaw = DB::table('sections')
-            ->where('survey_id', $id)
+            ->where('id_survey', $id)
             ->get();
             
-        // Obtener preguntas directamente
-        $questionsRaw = DB::table('questions')
-            ->where('survey_id', $id)
+        // Obtener preguntas directamente (las preguntas no tienen survey_id directo, se relacionan vía pivot)
+        $questionsRaw = DB::table('survey_questions')
+            ->join('questions', 'survey_questions.question_id', '=', 'questions.id')
+            ->where('survey_questions.survey_id', $id)
+            ->select('questions.*', 'survey_questions.section_id as pivot_section_id')
             ->get();
             
         // Obtener relaciones de la tabla pivot
@@ -1007,15 +1060,20 @@ public function debugRelations($id)
             ->where('survey_id', $id)
             ->get();
             
-        // Detectar preguntas huérfanas (sin relación en pivot)
-        $orphanQuestions = DB::table('questions')
-            ->where('survey_id', $id)
-            ->whereNotIn('id', function($query) use ($id) {
-                $query->select('question_id')
-                      ->from('survey_questions')
-                      ->where('survey_id', $id);
-            })
-            ->get();
+        // Detectar preguntas huérfanas (preguntas en secciones de esta encuesta pero sin relación en pivot)
+        $sectionIds = $sectionsRaw->pluck('id')->toArray();
+        $orphanQuestions = collect();
+        
+        if (!empty($sectionIds)) {
+            $orphanQuestions = DB::table('questions')
+                ->whereIn('section_id', $sectionIds)
+                ->whereNotIn('id', function($query) use ($id) {
+                    $query->select('question_id')
+                          ->from('survey_questions')
+                          ->where('survey_id', $id);
+                })
+                ->get();
+        }
         
         $problemDetected = $questionsRaw->count() > 0 && $pivotRelations->count() === 0;
         
