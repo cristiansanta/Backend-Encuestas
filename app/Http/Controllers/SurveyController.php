@@ -310,12 +310,31 @@ class SurveyController extends Controller
     // Función para obtener preguntas de una encuesta específica de options
     public function getSurveyQuestions($id)
     {
-        $survey = SurveyModel::find($id);
-        if ($survey) {
-            $surveyQuestions = $survey->surveyQuestions;
-            return response()->json($surveyQuestions);
-        } else {
-            return response()->json(['message' => 'Survey not found'], 404);
+        try {
+            $survey = SurveyModel::find($id);
+            if (!$survey) {
+                return response()->json(['message' => 'Survey not found'], 404);
+            }
+
+            // MEJORADO: Cargar todas las relaciones necesarias incluyendo preguntas hijas
+            $surveyQuestions = $survey->surveyQuestions()->with([
+                'question.type',
+                'question.options',
+                'question.parentQuestion', // Para preguntas hijas
+                'question.childQuestions.type', // Para preguntas padre con sus hijas
+                'question.childQuestions.options',
+                'question.childQuestions.conditions', // Condiciones de preguntas hijas
+                'question.conditions', // Condiciones de preguntas padre
+                'section'
+            ])->get();
+
+            // Log para debugging
+            \Log::info("getSurveyQuestions - Survey ID: {$id}, Questions found: {$surveyQuestions->count()}");
+            
+            return response()->json($surveyQuestions, 200);
+        } catch (\Exception $e) {
+            \Log::error("Error in getSurveyQuestions for survey {$id}: " . $e->getMessage());
+            return response()->json(['message' => 'Error retrieving survey questions', 'error' => $e->getMessage()], 500);
         }
     }
 
@@ -365,6 +384,11 @@ class SurveyController extends Controller
             'surveyQuestions.question.type',
             'surveyQuestions.question.options',
             'surveyQuestions.question.conditions',
+            // AGREGADO: Cargar relaciones padre-hija de preguntas
+            'surveyQuestions.question.parentQuestion', // Para preguntas hijas
+            'surveyQuestions.question.childQuestions.type', // Para preguntas padre con sus hijas
+            'surveyQuestions.question.childQuestions.options',
+            'surveyQuestions.question.childQuestions.conditions',
             'surveyQuestions.section'
         ])->find($id);
 
@@ -372,13 +396,25 @@ class SurveyController extends Controller
             return response()->json(['message' => 'Survey not found'], 404);
         }
 
-        // Log información de debug con detalles de secciones
+        // Log información de debug con detalles de secciones y preguntas
         $sectionDetails = $survey->sections->map(function($section) {
             return "ID: {$section->id}, Title: '{$section->title}', id_survey: {$section->id_survey}";
         })->toArray();
         
+        // AGREGADO: Log detallado de preguntas y sus relaciones
+        $questionDetails = $survey->surveyQuestions->map(function($sq) {
+            $question = $sq->question;
+            $optionsCount = $question->options ? $question->options->count() : 0;
+            $childrenCount = $question->childQuestions ? $question->childQuestions->count() : 0;
+            $hasParent = $question->cod_padre ? 'SI' : 'NO';
+            $hasConditions = $question->questions_conditions ? 'SI' : 'NO';
+            
+            return "Q{$question->id}: '{$question->title}' | Type: {$question->type_questions_id} | Options: {$optionsCount} | Children: {$childrenCount} | HasParent: {$hasParent} | HasConditions: {$hasConditions} | MotherAnswer: " . ($question->mother_answer_condition ?: 'NONE');
+        })->toArray();
+        
         \Log::info("getSurveyDetails for survey {$id} - Sections: {$survey->sections->count()}, Questions: {$survey->surveyQuestions->count()}");
         \Log::info("Section details: " . implode('; ', $sectionDetails));
+        \Log::info("Question details: " . implode(' | ', $questionDetails));
 
         // Deduplicar secciones si hay duplicados por título
         $uniqueSections = $survey->sections->unique(function ($section) {
