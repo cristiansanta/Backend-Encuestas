@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\QuestionModel;
+use App\Models\QuestionsoptionsModel;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
@@ -70,7 +71,9 @@ public function store(Request $request)
         'type_questions_id' => 'required|integer',
         'questions_conditions' => 'required|boolean',
         'mother_answer_condition' => 'nullable|string|max:500',
-        'section_id' => 'nullable|integer', // Añadido para soportar secciones       
+        'section_id' => 'nullable|integer', // Añadido para soportar secciones
+        'options' => 'nullable|array', // Añadido para soportar opciones
+        'options.*' => 'string|max:255', // Validar cada opción       
     ]);
 
     if ($validator->fails()) {
@@ -117,8 +120,33 @@ public function store(Request $request)
     }
 
     try {
+        // Separar las opciones de los datos de la pregunta
+        $options = $request->input('options', []);
+        unset($data['options']); // Remover opciones de los datos de la pregunta
+        
         $question = QuestionModel::create($data);
-        return response()->json($question, 200);
+        
+        // Crear opciones si fueron proporcionadas
+        if (!empty($options) && is_array($options)) {
+            foreach ($options as $option) {
+                // Manejar tanto strings como objetos con propiedad 'option'
+                $optionText = is_array($option) ? ($option['option'] ?? $option['text'] ?? '') : $option;
+                
+                if (!empty($optionText)) {
+                    QuestionsoptionsModel::create([
+                        'questions_id' => $question->id,
+                        'options' => $optionText,
+                        'creator_id' => $user->id,
+                        'status' => true,
+                    ]);
+                }
+            }
+        }
+        
+        // Cargar la pregunta con sus opciones para la respuesta
+        $questionWithOptions = QuestionModel::with(['options', 'type'])->find($question->id);
+        
+        return response()->json($questionWithOptions, 200);
     } catch (\Exception $e) {
         return response()->json(['error' => 'Error al crear la pregunta', 'details' => $e->getMessage()], 500);
     }

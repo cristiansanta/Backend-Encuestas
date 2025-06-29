@@ -261,6 +261,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::put('/{id}', 'update')->name('temporary-surveys.update');
         Route::delete('/{id}', 'destroy')->name('temporary-surveys.destroy');
         Route::post('/auto-save', 'autoSave')->name('temporary-surveys.auto-save');
+        Route::post('/{id}/publish', 'publish')->name('temporary-surveys.publish');
     });
     
     Route::prefix('Conditions')->controller(ConditionsController::class)->group(function () {
