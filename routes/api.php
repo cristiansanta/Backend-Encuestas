@@ -23,6 +23,7 @@ use App\Http\Controllers\GroupController;
 use App\Http\Controllers\AdminCleanupController;
 use App\Http\Controllers\ManualSurveyResponseController;
 use App\Http\Controllers\SurveyEmailController;
+use App\Http\Controllers\SurveyRespondentController;
 
 
 
@@ -309,6 +310,15 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // Rutas protegidas para gestión de encuestas por correo
     Route::prefix('survey-email')->controller(SurveyEmailController::class)->group(function () {
         Route::post('/generate-link', 'generateSurveyLink')->name('survey.email.generate');
+    });
+
+    // Rutas para gestión de respondientes de encuestas
+    Route::prefix('survey-respondents')->controller(SurveyRespondentController::class)->group(function () {
+        Route::get('/survey/{surveyId}', 'getBySurvey')->name('survey.respondents.by.survey');
+        Route::get('/survey/{surveyId}/stats', 'getStats')->name('survey.respondents.stats');
+        Route::post('/mark-responded', 'markAsResponded')->name('survey.respondents.mark.responded');
+        Route::put('/{id}', 'update')->name('survey.respondents.update');
+        Route::delete('/{id}', 'destroy')->name('survey.respondents.destroy');
     });
     
 });
