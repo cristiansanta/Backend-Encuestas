@@ -246,31 +246,55 @@ class SectionController extends Controller
     public function getSectionsBySurvey($id_survey)
 {
     try {
-        // Obtener todas las secciones relacionadas con el id_survey
-        $sections = SectionModel::where('id_survey', $id_survey)
-                                ->orderBy('id')
-                                ->get();
+        // Obtener secciones específicas del survey
+        $surveySections = SectionModel::where('id_survey', $id_survey)
+                                     ->orderBy('id')
+                                     ->get();
 
-        // MEJORADO: Log de debug para rastrear consultas
-        \Log::info("getSectionsBySurvey - Survey ID: {$id_survey}, Sections found: {$sections->count()}");
+        // Obtener secciones del banco que están siendo utilizadas por preguntas de este survey
+        $bankSectionsUsed = DB::table('sections as s')
+            ->join('questions as q', 's.id', '=', 'q.section_id')
+            ->join('survey_questions as sq', 'q.id', '=', 'sq.question_id')
+            ->where('sq.survey_id', $id_survey)
+            ->whereNull('s.id_survey') // Solo secciones del banco
+            ->select('s.*')
+            ->distinct()
+            ->orderBy('s.id')
+            ->get()
+            ->map(function($section) {
+                // Convertir a modelo para mantener consistencia
+                return new SectionModel((array) $section);
+            });
+
+        // Combinar ambos tipos de secciones
+        $allSections = $surveySections->merge($bankSectionsUsed);
+
+        // MEJORADO: Log de debug detallado
+        \Log::info("getSectionsBySurvey - Survey ID: {$id_survey}");
+        \Log::info("  - Survey-specific sections: {$surveySections->count()}");
+        \Log::info("  - Bank sections used: {$bankSectionsUsed->count()}");
+        \Log::info("  - Total sections returned: {$allSections->count()}");
         
-        if ($sections->count() > 0) {
-            $sectionDetails = $sections->map(function($section) {
-                return "ID: {$section->id}, Title: '{$section->title}', id_survey: {$section->id_survey}";
+        if ($allSections->count() > 0) {
+            $sectionDetails = $allSections->map(function($section) {
+                $surveyIdDisplay = $section->id_survey ?? 'NULL (banco)';
+                return "ID: {$section->id}, Title: '{$section->title}', id_survey: {$surveyIdDisplay}";
             })->toArray();
             \Log::info("Section details: " . implode('; ', $sectionDetails));
         }
 
-        // MEJORADO: Siempre devolver las secciones, aunque esté vacío (para evitar error 404 en frontend)
-        return response()->json($sections, 200);
+        // Devolver todas las secciones (específicas del survey + banco utilizadas)
+        return response()->json($allSections, 200);
     } catch (\Illuminate\Database\QueryException $e) {
         // Manejar errores de consulta
+        \Log::error("getSectionsBySurvey - Database error for survey {$id_survey}: " . $e->getMessage());
         return response()->json([
             'message' => 'Error al ejecutar la consulta a la base de datos.',
             'error' => $e->getMessage()
         ], 500);
     } catch (\Exception $e) {
         // Manejar errores generales
+        \Log::error("getSectionsBySurvey - General error for survey {$id_survey}: " . $e->getMessage());
         return response()->json([
             'message' => 'Error al obtener las secciones',
             'error' => $e->getMessage()

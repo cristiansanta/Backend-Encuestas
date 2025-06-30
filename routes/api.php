@@ -182,7 +182,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/{id}', 'show')->name('sections.show');
         Route::put('/{id}', 'update')->name('sections.update');
         Route::delete('/{id}', 'destroy')->name('sections.destroy');
-        Route::get('/survey/{id_survey}','getSectionsBySurvey')-> name('sections.getSectionsBySurvey');
+        Route::get('/survey/{id_survey}', 'getSectionsBySurvey')->name('sections.getSectionsBySurvey');
 
     });
     
