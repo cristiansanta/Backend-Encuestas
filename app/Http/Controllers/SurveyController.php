@@ -343,16 +343,76 @@ class SurveyController extends Controller
     {
         $survey = SurveyModel::find($id);
         if ($survey) {
-            $surveyQuestions = $survey->surveyQuestions()->with([
+            // 1. Obtener preguntas principales (relacionadas directamente en tabla pivot)
+            $parentQuestions = $survey->surveyQuestions()->with([
                 'question.type',
                 'question.options'
             ])->get();
+            
+            // 2. Obtener IDs de preguntas padre para buscar sus hijas
+            $parentQuestionIds = $parentQuestions->pluck('question.id')->toArray();
+            
+            // 3. Buscar preguntas hijas (que tienen cod_padre apuntando a preguntas de esta encuesta)
+            $childQuestions = collect();
+            if (!empty($parentQuestionIds)) {
+                $childQuestionsRaw = \DB::table('questions')
+                    ->whereIn('cod_padre', $parentQuestionIds)
+                    ->where('cod_padre', '>', 0) // Asegurar que son realmente preguntas hijas
+                    ->get();
+                
+                // Formatear preguntas hijas con la misma estructura que las padre
+                foreach ($childQuestionsRaw as $childQ) {
+                    // Obtener el tipo de pregunta
+                    $questionType = \DB::table('type_questions')->find($childQ->type_questions_id);
+                    
+                    // Obtener opciones de respuesta
+                    $questionOptions = \DB::table('question_options')
+                        ->where('questions_id', $childQ->id)
+                        ->where('status', true)
+                        ->get();
+                    
+                    // Crear objeto simulando la estructura de surveyQuestions
+                    $childQuestionFormatted = (object) [
+                        'id' => 'child_' . $childQ->id, // ID único para diferenciar
+                        'survey_id' => $id,
+                        'question_id' => $childQ->id,
+                        'section_id' => $childQ->section_id,
+                        'question' => (object) [
+                            'id' => $childQ->id,
+                            'title' => $childQ->title,
+                            'descrip' => $childQ->descrip,
+                            'validate' => $childQ->validate,
+                            'cod_padre' => $childQ->cod_padre,
+                            'questions_conditions' => $childQ->questions_conditions,
+                            'mother_answer_condition' => $childQ->mother_answer_condition,
+                            'type_questions_id' => $childQ->type_questions_id,
+                            'section_id' => $childQ->section_id,
+                            'type' => $questionType,
+                            'options' => $questionOptions
+                        ]
+                    ];
+                    
+                    $childQuestions->push($childQuestionFormatted);
+                }
+            }
+            
+            // 4. Combinar preguntas padre e hijas
+            $allQuestions = $parentQuestions->concat($childQuestions);
+            
+            \Log::info("getSurveyQuestionsop for survey {$id}: Parent questions: {$parentQuestions->count()}, Child questions: {$childQuestions->count()}, Total: {$allQuestions->count()}");
+            
             return response()->json([
-                'survey_questions' => $surveyQuestions,
+                'survey_questions' => $allQuestions,
                 'survey_info' => [
                     'id' => $survey->id,
                     'title' => $survey->title,
                     'description' => $survey->descrip
+                ],
+                'debug_info' => [
+                    'parent_questions_count' => $parentQuestions->count(),
+                    'child_questions_count' => $childQuestions->count(),
+                    'total_questions_count' => $allQuestions->count(),
+                    'parent_question_ids' => $parentQuestionIds
                 ]
             ]);
         } else {
