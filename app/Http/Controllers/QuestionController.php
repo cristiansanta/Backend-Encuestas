@@ -103,7 +103,9 @@ public function store(Request $request)
         }
     }
 
-    // Verificar si ya existe un registro similar para este usuario
+    // TEMPORALMENTE DESHABILITADO - Verificar si ya existe un registro similar para este usuario
+    // La detección de duplicados está interfiriendo con opciones personalizadas
+    /*
     $existingQuestion = QuestionModel::where('title', $data['title'])
                                       ->where('descrip', $data['descrip'])
                                       ->where('type_questions_id', $data['type_questions_id'])
@@ -118,6 +120,7 @@ public function store(Request $request)
             'existing' => true
         ], 201);
     }
+    */
 
     try {
         // Separar las opciones de los datos de la pregunta
