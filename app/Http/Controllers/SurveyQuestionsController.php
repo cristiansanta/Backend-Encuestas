@@ -43,15 +43,18 @@ class SurveyQuestionsController extends Controller
      */
     public function store(Request $request)
     {
-        // Validar los datos recibidos
+        // Validar los datos recibidos - MEJORADO para aceptar tanto boolean como integer para status
         $validator = Validator::make($request->all(), [
             'survey_id' => 'required|integer',
             'question_id' => 'required|integer',
             'section_id' => 'required|integer',
             'creator_id' => 'required|integer',
-            'status' => 'required|boolean',
+            'status' => 'required|boolean', // Acepta 0,1,true,false
             'user_id' => 'required|integer',
         ]);
+
+        // Log datos recibidos para debugging
+        \Log::info('SurveyQuestionsController - Datos recibidos:', $request->all());
 
         // Si la validación falla, devolver un mensaje de error
         if ($validator->fails()) {

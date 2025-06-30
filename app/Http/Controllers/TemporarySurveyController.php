@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\TemporarySurveyModel;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 class TemporarySurveyController extends Controller
 {
@@ -311,6 +312,283 @@ class TemporarySurveyController extends Controller
 
         } catch (\Exception $e) {
             \Log::error('Error during draft cleanup: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Publish temporary survey - Transfer temporary data to permanent database records
+     */
+    public function publish(Request $request, $id)
+    {
+        try {
+            \Log::info("TemporarySurveyController::publish - Starting publish process for temporary survey ID: {$id}");
+            
+            // Get the temporary survey
+            $temporarySurvey = TemporarySurveyModel::where('user_id', Auth::id())
+                ->findOrFail($id);
+
+            \Log::info("TemporarySurveyController::publish - Found temporary survey: {$temporarySurvey->title}");
+
+            // Start database transaction
+            \DB::beginTransaction();
+
+            // 1. Create the permanent survey
+            $surveyData = [
+                'title' => $temporarySurvey->title,
+                'descrip' => $temporarySurvey->description,
+                'id_category' => $temporarySurvey->categories ?: null,
+                'status' => true,
+                'publication_status' => 'published',
+                'user_create' => Auth::user()->name ?? Auth::user()->email ?? 'system',
+                'start_date' => $temporarySurvey->start_date ?? now(),
+                'end_date' => $temporarySurvey->end_date ?? now()->addDays(7)
+            ];
+
+            $survey = \App\Models\SurveyModel::create($surveyData);
+            \Log::info("TemporarySurveyController::publish - Created survey ID: {$survey->id}");
+
+            // 2. Transfer sections
+            $sectionsData = $temporarySurvey->sections ?? [];
+            $sectionIdMap = []; // Map temporary section IDs to permanent ones
+
+            foreach ($sectionsData as $sectionData) {
+                $section = \App\Models\SectionModel::create([
+                    'title' => $sectionData['title'] ?? 'Sección sin título',
+                    'descrip_sect' => $sectionData['description'] ?? '',
+                    'id_survey' => $survey->id
+                ]);
+                
+                // Map temporary ID to permanent ID
+                if (isset($sectionData['id'])) {
+                    $sectionIdMap[$sectionData['id']] = $section->id;
+                }
+                
+                \Log::info("TemporarySurveyController::publish - Created section ID: {$section->id} for temp ID: " . ($sectionData['id'] ?? 'unknown'));
+            }
+
+            // 3. Transfer questions with their custom options
+            $questionsData = $temporarySurvey->questions ?? [];
+            $transferredQuestions = 0;
+            $transferredOptions = 0;
+            $questionIdMap = []; // Map temporary question IDs to permanent ones
+
+            // First pass: Create parent questions only
+            foreach ($questionsData as $questionData) {
+                // Skip child questions in first pass
+                if (isset($questionData['parentId']) && !empty($questionData['parentId']) && $questionData['parentId'] !== 0) {
+                    continue;
+                }
+
+                \Log::info("TemporarySurveyController::publish - Processing parent question: " . ($questionData['title'] ?? 'Untitled'));
+                \Log::info("TemporarySurveyController::publish - Question data: " . json_encode($questionData));
+
+                // Map section ID
+                $sectionId = null;
+                if (isset($questionData['section']) && isset($sectionIdMap[$questionData['section']])) {
+                    $sectionId = $sectionIdMap[$questionData['section']];
+                } elseif (isset($sectionIdMap) && count($sectionIdMap) > 0) {
+                    $sectionId = array_values($sectionIdMap)[0]; // Use first section as fallback
+                }
+
+                // Create the question
+                $question = \App\Models\QuestionModel::create([
+                    'title' => $questionData['title'] ?? 'Pregunta sin título',
+                    'descrip' => $questionData['description'] ?? '',
+                    'validate' => $questionData['validation'] ?? 'Opcional',
+                    'cod_padre' => 0, // Parent questions have cod_padre = 0
+                    'bank' => false,
+                    'type_questions_id' => $questionData['questionType'] ?? 1,
+                    'creator_id' => Auth::id(),
+                    'questions_conditions' => false, // Parent questions don't have conditions
+                    'section_id' => $sectionId
+                ]);
+
+                // Map temporary ID to permanent ID
+                if (isset($questionData['id'])) {
+                    $questionIdMap[$questionData['id']] = $question->id;
+                }
+
+                \Log::info("TemporarySurveyController::publish - Created parent question ID: {$question->id} for temp ID: " . ($questionData['id'] ?? 'unknown'));
+
+                // Create survey-question relationship for parent question
+                \App\Models\SurveyquestionsModel::create([
+                    'survey_id' => $survey->id,
+                    'question_id' => $question->id,
+                    'section_id' => $sectionId,
+                    'creator_id' => Auth::id(),
+                    'status' => true,
+                    'user_id' => Auth::id()
+                ]);
+
+                // 4. CRITICAL: Transfer custom options
+                if (isset($questionData['options']) && is_array($questionData['options']) && count($questionData['options']) > 0) {
+                    \Log::info("TemporarySurveyController::publish - Transferring " . count($questionData['options']) . " custom options for question {$question->id}");
+                    
+                    foreach ($questionData['options'] as $optionData) {
+                        $optionText = '';
+                        
+                        // Handle different option formats
+                        if (is_string($optionData)) {
+                            $optionText = $optionData;
+                        } elseif (is_array($optionData)) {
+                            $optionText = $optionData['text'] ?? $optionData['option'] ?? $optionData['value'] ?? $optionData['label'] ?? '';
+                        }
+
+                        if (!empty($optionText) && $optionText !== 'Opción 1' && $optionText !== 'Opción 2' && $optionText !== 'Opción 3') {
+                            \App\Models\QuestionsoptionsModel::create([
+                                'questions_id' => $question->id,
+                                'options' => $optionText,
+                                'creator_id' => Auth::id(),
+                                'status' => true
+                            ]);
+                            
+                            $transferredOptions++;
+                            \Log::info("TemporarySurveyController::publish - Transferred custom option: '{$optionText}' for question {$question->id}");
+                        } else {
+                            \Log::warning("TemporarySurveyController::publish - Skipped empty or default option: '{$optionText}'");
+                        }
+                    }
+                } else {
+                    \Log::warning("TemporarySurveyController::publish - No custom options found for question {$question->id}, type: " . ($questionData['questionType'] ?? 'unknown'));
+                }
+
+                $transferredQuestions++;
+            }
+
+            // Second pass: Create child questions
+            foreach ($questionsData as $questionData) {
+                // Only process child questions in second pass
+                if (!isset($questionData['parentId']) || empty($questionData['parentId']) || $questionData['parentId'] === 0) {
+                    continue;
+                }
+
+                \Log::info("TemporarySurveyController::publish - Processing child question: " . ($questionData['title'] ?? 'Untitled'));
+                \Log::info("TemporarySurveyController::publish - Parent ID: " . $questionData['parentId']);
+
+                // Map parent ID from temporary to permanent
+                $parentId = 0;
+                if (isset($questionIdMap[$questionData['parentId']])) {
+                    $parentId = $questionIdMap[$questionData['parentId']];
+                } else {
+                    // If direct mapping fails, try to extract numeric ID from complex ID
+                    if (preg_match('/(\d+)/', $questionData['parentId'], $matches)) {
+                        $tempNumericId = $matches[1];
+                        // Look for this numeric ID in our question map
+                        foreach ($questionIdMap as $tempId => $permanentId) {
+                            if (strpos($tempId, $tempNumericId) !== false) {
+                                $parentId = $permanentId;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if ($parentId === 0) {
+                    \Log::warning("TemporarySurveyController::publish - Could not map parent ID for child question: " . ($questionData['title'] ?? 'Untitled'));
+                    continue;
+                }
+
+                // Map section ID (same as parent or use mapping)
+                $sectionId = null;
+                if (isset($questionData['section']) && isset($sectionIdMap[$questionData['section']])) {
+                    $sectionId = $sectionIdMap[$questionData['section']];
+                } elseif (isset($sectionIdMap) && count($sectionIdMap) > 0) {
+                    $sectionId = array_values($sectionIdMap)[0];
+                }
+
+                // Create the child question
+                $childQuestion = \App\Models\QuestionModel::create([
+                    'title' => $questionData['title'] ?? 'Pregunta hija sin título',
+                    'descrip' => $questionData['description'] ?? '',
+                    'validate' => $questionData['validation'] ?? 'Opcional',
+                    'cod_padre' => $parentId, // Map to actual parent question ID
+                    'bank' => false,
+                    'type_questions_id' => $questionData['questionType'] ?? 1,
+                    'creator_id' => Auth::id(),
+                    'questions_conditions' => true, // Child questions have conditions
+                    'mother_answer_condition' => $questionData['mother_answer_condition'] ?? $questionData['condition'] ?? null,
+                    'section_id' => $sectionId
+                ]);
+
+                // Map temporary ID to permanent ID for this child question too
+                if (isset($questionData['id'])) {
+                    $questionIdMap[$questionData['id']] = $childQuestion->id;
+                }
+
+                \Log::info("TemporarySurveyController::publish - Created child question ID: {$childQuestion->id} with parent ID: {$parentId}");
+
+                // Create survey-question relationship for child question
+                \App\Models\SurveyquestionsModel::create([
+                    'survey_id' => $survey->id,
+                    'question_id' => $childQuestion->id,
+                    'section_id' => $sectionId,
+                    'creator_id' => Auth::id(),
+                    'status' => true,
+                    'user_id' => Auth::id()
+                ]);
+
+                // Transfer custom options for child question
+                if (isset($questionData['options']) && is_array($questionData['options']) && count($questionData['options']) > 0) {
+                    \Log::info("TemporarySurveyController::publish - Transferring " . count($questionData['options']) . " custom options for child question {$childQuestion->id}");
+                    
+                    foreach ($questionData['options'] as $optionData) {
+                        $optionText = '';
+                        
+                        // Handle different option formats
+                        if (is_string($optionData)) {
+                            $optionText = $optionData;
+                        } elseif (is_array($optionData)) {
+                            $optionText = $optionData['text'] ?? $optionData['option'] ?? $optionData['value'] ?? $optionData['label'] ?? '';
+                        }
+
+                        if (!empty($optionText) && $optionText !== 'Opción 1' && $optionText !== 'Opción 2' && $optionText !== 'Opción 3') {
+                            \App\Models\QuestionsoptionsModel::create([
+                                'questions_id' => $childQuestion->id,
+                                'options' => $optionText,
+                                'creator_id' => Auth::id(),
+                                'status' => true
+                            ]);
+                            
+                            $transferredOptions++;
+                            \Log::info("TemporarySurveyController::publish - Transferred custom option: '{$optionText}' for child question {$childQuestion->id}");
+                        }
+                    }
+                }
+
+                $transferredQuestions++;
+            }
+
+            // Update temporary survey status
+            $temporarySurvey->status = 'published';
+            $temporarySurvey->save();
+
+            // Commit transaction
+            \DB::commit();
+
+            \Log::info("TemporarySurveyController::publish - Successfully published survey. Questions: {$transferredQuestions}, Options: {$transferredOptions}");
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Encuesta publicada exitosamente',
+                'data' => [
+                    'survey_id' => $survey->id,
+                    'temporary_survey_id' => $temporarySurvey->id,
+                    'transferred_questions' => $transferredQuestions,
+                    'transferred_options' => $transferredOptions,
+                    'sections_created' => count($sectionIdMap)
+                ]
+            ], 201);
+
+        } catch (\Exception $e) {
+            \DB::rollback();
+            \Log::error("TemporarySurveyController::publish - Error publishing survey: " . $e->getMessage());
+            \Log::error("TemporarySurveyController::publish - Stack trace: " . $e->getTraceAsString());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al publicar la encuesta',
+                'error' => $e->getMessage()
+            ], 500);
         }
     }
 }
