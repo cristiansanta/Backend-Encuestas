@@ -252,19 +252,14 @@ class SectionController extends Controller
                                      ->get();
 
         // Obtener secciones del banco que están siendo utilizadas por preguntas de este survey
-        $bankSectionsUsed = DB::table('sections as s')
-            ->join('questions as q', 's.id', '=', 'q.section_id')
+        $bankSectionsUsed = SectionModel::join('questions as q', 'sections.id', '=', 'q.section_id')
             ->join('survey_questions as sq', 'q.id', '=', 'sq.question_id')
             ->where('sq.survey_id', $id_survey)
-            ->whereNull('s.id_survey') // Solo secciones del banco
-            ->select('s.*')
+            ->whereNull('sections.id_survey') // Solo secciones del banco
+            ->select('sections.*')
             ->distinct()
-            ->orderBy('s.id')
-            ->get()
-            ->map(function($section) {
-                // Convertir a modelo para mantener consistencia
-                return new SectionModel((array) $section);
-            });
+            ->orderBy('sections.id')
+            ->get();
 
         // Combinar ambos tipos de secciones
         $allSections = $surveySections->merge($bankSectionsUsed);
