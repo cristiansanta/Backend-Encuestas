@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\NotificationSurvaysModel;
 use App\Models\SurveyModel;
+use App\Models\SurveyRespondentModel;
+use App\Models\GroupModel;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
@@ -82,6 +84,46 @@ class NotificationSurvaysController extends Controller
 
         // Crear un nuevo registro en la base de datos
         $record = NotificationSurvaysModel::create($validatedData);
+
+        // NUEVA FUNCIONALIDAD: Crear registros de respondientes en estado "Enviada"
+        if ($validatedData['id_survey'] && $validatedData['email']) {
+            $emails = is_array($validatedData['email']) ? $validatedData['email'] : [$validatedData['email']];
+            
+            // Extraer información del grupo si está disponible en los datos
+            $data = is_string($validatedData['data']) ? json_decode($validatedData['data'], true) : $validatedData['data'];
+            $groupName = $data['grupo'] ?? null;
+            $groupId = null;
+            
+            // Intentar encontrar el grupo por nombre
+            if ($groupName) {
+                $group = GroupModel::where('name', $groupName)->first();
+                $groupId = $group ? $group->id : null;
+            }
+            
+            foreach ($emails as $email) {
+                // Verificar si ya existe un registro para esta combinación
+                $existingRespondent = SurveyRespondentModel::where('survey_id', $validatedData['id_survey'])
+                    ->where('respondent_email', $email)
+                    ->first();
+                    
+                if (!$existingRespondent) {
+                    // Crear token único para el correo
+                    $emailToken = Str::random(64);
+                    
+                    SurveyRespondentModel::create([
+                        'survey_id' => $validatedData['id_survey'],
+                        'respondent_name' => $this->extractNameFromEmail($email),
+                        'respondent_email' => $email,
+                        'status' => 'Enviada',
+                        'sent_at' => now(),
+                        'notification_id' => $record->id,
+                        'group_id' => $groupId,
+                        'group_name' => $groupName,
+                        'email_token' => $emailToken
+                    ]);
+                }
+            }
+        }
 
         // Retornar la respuesta en JSON
         return response()->json([
@@ -312,6 +354,29 @@ class NotificationSurvaysController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Extrae un nombre aproximado del correo electrónico
+     */
+    private function extractNameFromEmail($email)
+    {
+        // Extraer la parte antes del @
+        $namePart = explode('@', $email)[0];
+        
+        // Reemplazar puntos, guiones y números con espacios
+        $namePart = preg_replace('/[._-]/', ' ', $namePart);
+        $namePart = preg_replace('/\d+/', '', $namePart);
+        
+        // Capitalizar cada palabra
+        $name = ucwords(trim($namePart));
+        
+        // Si queda muy corto o vacío, usar el correo completo
+        if (strlen($name) < 2) {
+            return $email;
+        }
+        
+        return $name;
     }
     
 }
