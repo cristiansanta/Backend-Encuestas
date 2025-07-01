@@ -409,7 +409,8 @@ class SurveyController extends Controller
             'surveyQuestions.question.childQuestions.type', // Para preguntas padre con sus hijas
             'surveyQuestions.question.childQuestions.options',
             'surveyQuestions.question.childQuestions.conditions',
-            'surveyQuestions.section'
+            'surveyQuestions.section',
+            'surveyQuestions.question.section' // ADDED: Load section info for questions
         ])->find($id);
 
         if (!$survey) {
@@ -444,6 +445,34 @@ class SurveyController extends Controller
         if ($uniqueSections->count() !== $survey->sections->count()) {
             \Log::warning("Detected {$survey->sections->count()} sections but only {$uniqueSections->count()} unique by title for survey {$id}");
             $survey->setRelation('sections', $uniqueSections);
+        }
+
+        // CRITICAL FIX: Load sections used by questions even if they're from the bank
+        // Get section IDs used by questions in this survey
+        $sectionIdsUsedByQuestions = $survey->surveyQuestions
+            ->pluck('question.section_id')
+            ->filter()
+            ->unique()
+            ->values();
+            
+        if ($sectionIdsUsedByQuestions->isNotEmpty()) {
+            // Get bank sections that are being used by questions
+            $bankSectionsUsed = SectionModel::whereIn('id', $sectionIdsUsedByQuestions)
+                ->whereNull('id_survey') // Only bank sections
+                ->get();
+                
+            if ($bankSectionsUsed->isNotEmpty()) {
+                \Log::info("getSurveyDetails - Found {$bankSectionsUsed->count()} bank sections used by questions");
+                
+                // Merge bank sections with survey-specific sections
+                $allSections = $survey->sections->merge($bankSectionsUsed);
+                
+                // Remove duplicates and update the sections relation
+                $uniqueSections = $allSections->unique('id')->values();
+                $survey->setRelation('sections', $uniqueSections);
+                
+                \Log::info("getSurveyDetails - Total sections after merging: {$uniqueSections->count()}");
+            }
         }
 
         // Agregar contadores para debug
