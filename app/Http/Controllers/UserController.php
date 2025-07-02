@@ -27,6 +27,8 @@ class UserController extends Controller
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
             'password' => 'required|string|min:8|confirmed', // Confirmed necesita un 'password_confirmation' en la solicitud
+            'document_type' => 'nullable|in:cedula_ciudadania,tarjeta_identidad,cedula_extranjeria,pep,permiso_proteccion_temporal',
+            'document_number' => 'nullable|string|max:50',
         ]);
     
         if ($validator->fails()) {
@@ -40,6 +42,8 @@ class UserController extends Controller
                 'email' => $request->email,
                 'password' => Hash::make($request->password),
                 'active' => true, // Por defecto activo
+                'document_type' => $request->document_type,
+                'document_number' => $request->document_number,
             ]);
     
             return response()->json(['user' => $user, 'message' => 'Usuario creado exitosamente'], 201);
@@ -83,6 +87,15 @@ class UserController extends Controller
 
     if ($request->has('password')) {
         $user->password = bcrypt($request->input('password'));
+    }
+
+    // Actualizar campos de documento
+    if ($request->has('document_type')) {
+        $user->document_type = $request->input('document_type');
+    }
+
+    if ($request->has('document_number')) {
+        $user->document_number = $request->input('document_number');
     }
 
     // Guardar los cambios

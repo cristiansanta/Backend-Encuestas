@@ -27,6 +27,8 @@ class User extends Authenticatable
         'password',
         'active',
         'rol',
+        'document_type',
+        'document_number',
     ];
 
     /**
