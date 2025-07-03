@@ -163,6 +163,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::post('/store', 'store')->name('Notification.store');
         Route::put('/{id}', 'update')->name('Notification.update');
         Route::get('/download', 'download')->name('Notification.download');
+        Route::get('/download-respondents-template', 'downloadRespondentsTemplate')->name('Notification.downloadRespondentsTemplate');
         Route::post('/generate-email-links', 'generateSurveyEmailLinks')->name('Notification.generateEmailLinks');
         Route::post('/survey-status', 'getSurveyNotificationStatus')->name('Notification.surveyStatus');
     });
