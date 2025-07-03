@@ -18,7 +18,14 @@ class GroupUserModel extends Model
         'nombre',
         'correo',
         'categoria',
-        'created_by'
+        'created_by',
+        'tipo_documento',
+        'numero_documento',
+        'regional',
+        'centro_formacion',
+        'programa_formacion',
+        'ficha_grupo',
+        'tipo_caracterizacion'
     ];
 
     protected $casts = [

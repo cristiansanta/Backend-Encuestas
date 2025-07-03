@@ -37,12 +37,17 @@ Route::post('newusers/store', [UserController::class, 'store']);
 // Rutas temporales para testing de grupos (sin autenticación)
 Route::prefix('groups-test')->controller(GroupController::class)->group(function () {
     Route::get('/', 'index');
+    Route::post('/', 'store'); // Crear grupo
     Route::post('/add-user', 'addUser');
     Route::post('/add-users', 'addUsers');
+    Route::post('/users', 'addUser'); // Agregar usuario (ruta general)
     Route::put('/update/{id}', 'update'); // Actualizar grupo
+    Route::put('/{id}', 'update'); // Actualizar grupo (alternativa)
     Route::get('/{id}/users', 'getGroupUsers');
     Route::put('/{groupId}/users/{userId}', 'updateUser');
     Route::delete('/{groupId}/users/{userId}', 'deleteUser');
+    Route::delete('/{id}', 'destroy'); // Eliminar grupo
+    Route::post('/{id}/users', 'addUserToGroup'); // Agregar usuario a grupo específico
     Route::get('/surveys-list', [SurveyController::class, 'list']);
 });
 
