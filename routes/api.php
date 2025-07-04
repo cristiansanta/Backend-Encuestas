@@ -24,6 +24,7 @@ use App\Http\Controllers\AdminCleanupController;
 use App\Http\Controllers\ManualSurveyResponseController;
 use App\Http\Controllers\SurveyEmailController;
 use App\Http\Controllers\SurveyRespondentController;
+use App\Http\Controllers\ContactInfoController;
 
 
 
@@ -33,6 +34,9 @@ Route::get('/storage/images/{filename}', [FileController::class, 'show']);
 Route::post('/login', [AuthController::class, 'login']);
 
 Route::post('newusers/store', [UserController::class, 'store']);
+
+// Contact information endpoint (public)
+Route::get('contact-info', [ContactInfoController::class, 'getContactInfo']);
 
 // Rutas temporales para testing de grupos (sin autenticación)
 Route::prefix('groups-test')->controller(GroupController::class)->group(function () {
