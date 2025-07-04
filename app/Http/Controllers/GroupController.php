@@ -58,6 +58,10 @@ class GroupController extends Controller
     public function store(Request $request)
     {
         try {
+            // Aumentar límite de tiempo para importaciones grandes
+            set_time_limit(300); // 5 minutos para importaciones grandes
+            ini_set('memory_limit', '512M'); // Aumentar memoria disponible
+            
             // Log de datos recibidos para debug
             \Log::info('GroupController store - Datos recibidos:', $request->all());
             
@@ -134,32 +138,51 @@ class GroupController extends Controller
                 // Si se proporcionaron usuarios, agregarlos
                 if (isset($requestData['users']) && is_array($requestData['users'])) {
                     $usersData = [];
+                    $userCount = count($requestData['users']);
                     
-                    foreach ($requestData['users'] as $userData) {
-                        $userRecord = [
-                            'id' => uniqid('user_', true),
-                            'nombre' => $userData['nombre'],
-                            'correo' => $userData['correo'],
-                            'categoria' => $userData['categoria'],
-                            'tipo_documento' => $userData['tipo_documento'] ?? null,
-                            'numero_documento' => $userData['numero_documento'] ?? null,
-                            'regional' => $userData['regional'] ?? null,
-                            'centro_formacion' => $userData['centro_formacion'] ?? null,
-                            'programa_formacion' => $userData['programa_formacion'] ?? null,
-                            'ficha_grupo' => $userData['ficha_grupo'] ?? null,
-                            'tipo_caracterizacion' => $userData['tipo_caracterizacion'] ?? null,
-                            'created_at' => now()->toISOString(),
-                            'created_by' => Auth::id() ?? 1
-                        ];
+                    // Log para monitorear el progreso
+                    \Log::info("GroupController store - Procesando {$userCount} usuarios");
+                    
+                    // Procesar usuarios en lotes para optimizar memoria
+                    $batchSize = 500;
+                    $batches = array_chunk($requestData['users'], $batchSize);
+                    
+                    foreach ($batches as $batchIndex => $batch) {
+                        \Log::info("GroupController store - Procesando lote " . ($batchIndex + 1) . " de " . count($batches));
                         
-                        $usersData[] = $userRecord;
-                        $addedUsers[] = $userRecord;
+                        foreach ($batch as $userData) {
+                            $userRecord = [
+                                'id' => uniqid('user_', true),
+                                'nombre' => $userData['nombre'],
+                                'correo' => $userData['correo'],
+                                'categoria' => $userData['categoria'],
+                                'tipo_documento' => $userData['tipo_documento'] ?? null,
+                                'numero_documento' => $userData['numero_documento'] ?? null,
+                                'regional' => $userData['regional'] ?? null,
+                                'centro_formacion' => $userData['centro_formacion'] ?? null,
+                                'programa_formacion' => $userData['programa_formacion'] ?? null,
+                                'ficha_grupo' => $userData['ficha_grupo'] ?? null,
+                                'tipo_caracterizacion' => $userData['tipo_caracterizacion'] ?? null,
+                                'created_at' => now()->toISOString(),
+                                'created_by' => Auth::id() ?? 1
+                            ];
+                            
+                            $usersData[] = $userRecord;
+                            $addedUsers[] = $userRecord;
+                        }
+                        
+                        // Limpiar memoria después de cada lote
+                        if (function_exists('gc_collect_cycles')) {
+                            gc_collect_cycles();
+                        }
                     }
                     
                     // Guardar usuarios en el array JSON
                     $group->users_data = $usersData;
                     $group->user_count = count($usersData);
                     $group->save();
+                    
+                    \Log::info("GroupController store - Usuarios procesados exitosamente: {$userCount}");
                 }
 
                 DB::commit();
