@@ -16,6 +16,7 @@ class RolesAndPermissionsSeeder extends Seeder
             'view-users',
             'create-users',
             'edit-users',
+            'delete-users',
             'deactivate-users',
             'assign-roles',
             
@@ -52,6 +53,7 @@ class RolesAndPermissionsSeeder extends Seeder
             'access-question-bank',
             'access-temporary-table',
             'access-user-manager',
+            'access-encuestados',
             
             // Import/Export permissions
             'import-data',
@@ -71,37 +73,13 @@ class RolesAndPermissionsSeeder extends Seeder
             $superadminRole->givePermissionTo(Permission::all());
         }
 
-        // ADMIN ROLE - Comprehensive access with some limitations
-        if (!Role::where('name', 'Admin')->exists()) {
+        // ADMIN ROLE - Same permissions as Superadmin
+        $adminRole = Role::where('name', 'Admin')->first();
+        if (!$adminRole) {
             $adminRole = Role::create(['name' => 'Admin']);
-            $adminRole->givePermissionTo([
-                // User management - can edit and create users but not deactivate
-                'view-users',
-                'create-users',
-                'edit-users',
-                'assign-roles',
-                
-                // Survey management - can create and unpublish
-                'create-surveys',
-                'unpublish-surveys',
-                
-                // Question bank - can only reuse, not create or delete
-                'view-question-bank',
-                'reuse-questions',
-                'reuse-sections',
-                'reuse-categories',
-                
-                // Temporary table - full view access
-                'view-temporary-table',
-                
-                // Navigation - access to all navbar options
-                'access-home',
-                'access-create-surveys',
-                'access-question-bank',
-                'access-temporary-table',
-                'access-user-manager',
-            ]);
         }
+        // Always sync permissions to ensure they're up to date
+        $adminRole->syncPermissions(Permission::all());
 
         // FUNCIONARIO ROLE - Limited survey creation and view-only user management
         if (!Role::where('name', 'Funcionario')->exists()) {

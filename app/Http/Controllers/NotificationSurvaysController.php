@@ -182,6 +182,43 @@ class NotificationSurvaysController extends Controller
         ]);
     }
 
+    public function downloadRespondentsTemplate()
+    {
+        try {
+            // Crear contenido CSV con las columnas requeridas
+            $csvContent = "TipoDocumento,NumeroDocumento,Nombre,Correo,Regional,CentroFormacion,ProgramaFormacion,FichaGrupo,TipoCaracterizacion\n";
+            $csvContent .= "CC,12345678,Juan Pérez,juan.perez@ejemplo.com,Antioquia,Centro Industrial,Tecnología en Sistemas,123456,Egresados\n";
+            $csvContent .= "TI,87654321,María López,maria.lopez@ejemplo.com,Cundinamarca,Centro de Servicios,Administración,654321,Servidores\n";
+            
+            // Crear archivo temporal
+            $tempPath = tempnam(sys_get_temp_dir(), 'plantilla_encuestados_');
+            file_put_contents($tempPath, $csvContent);
+            
+            // Crear respuesta de descarga
+            $response = response()->download($tempPath, 'Plantilla_Encuestados.csv', [
+                'Content-Type' => 'text/csv',
+                'Cache-Control' => 'no-cache, no-store, must-revalidate',
+                'Pragma' => 'no-cache',
+                'Expires' => '0'
+            ]);
+            
+            // Eliminar archivo temporal después de la descarga
+            register_shutdown_function(function() use ($tempPath) {
+                if (file_exists($tempPath)) {
+                    unlink($tempPath);
+                }
+            });
+            
+            return $response;
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Error al generar la plantilla',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
     /**
      * Genera enlaces de encuesta con tokens JWT para envío masivo por correo
      */

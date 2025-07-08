@@ -24,6 +24,7 @@ use App\Http\Controllers\AdminCleanupController;
 use App\Http\Controllers\ManualSurveyResponseController;
 use App\Http\Controllers\SurveyEmailController;
 use App\Http\Controllers\SurveyRespondentController;
+use App\Http\Controllers\ContactInfoController;
 
 
 
@@ -34,15 +35,23 @@ Route::post('/login', [AuthController::class, 'login']);
 
 Route::post('newusers/store', [UserController::class, 'store']);
 
+// Contact information endpoint (public)
+Route::get('contact-info', [ContactInfoController::class, 'getContactInfo']);
+
 // Rutas temporales para testing de grupos (sin autenticación)
 Route::prefix('groups-test')->controller(GroupController::class)->group(function () {
     Route::get('/', 'index');
+    Route::post('/', 'store'); // Crear grupo
     Route::post('/add-user', 'addUser');
     Route::post('/add-users', 'addUsers');
+    Route::post('/users', 'addUser'); // Agregar usuario (ruta general)
     Route::put('/update/{id}', 'update'); // Actualizar grupo
+    Route::put('/{id}', 'update'); // Actualizar grupo (alternativa)
     Route::get('/{id}/users', 'getGroupUsers');
     Route::put('/{groupId}/users/{userId}', 'updateUser');
     Route::delete('/{groupId}/users/{userId}', 'deleteUser');
+    Route::delete('/{id}', 'destroy'); // Eliminar grupo
+    Route::post('/{id}/users', 'addUserToGroup'); // Agregar usuario a grupo específico
     Route::get('/surveys-list', [SurveyController::class, 'list']);
 });
 
@@ -158,6 +167,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::post('/store', 'store')->name('Notification.store');
         Route::put('/{id}', 'update')->name('Notification.update');
         Route::get('/download', 'download')->name('Notification.download');
+        Route::get('/download-respondents-template', 'downloadRespondentsTemplate')->name('Notification.downloadRespondentsTemplate');
         Route::post('/generate-email-links', 'generateSurveyEmailLinks')->name('Notification.generateEmailLinks');
         Route::post('/survey-status', 'getSurveyNotificationStatus')->name('Notification.surveyStatus');
     });
