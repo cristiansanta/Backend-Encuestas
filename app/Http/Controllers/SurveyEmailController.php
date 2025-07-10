@@ -107,7 +107,7 @@ class SurveyEmailController extends Controller
     /**
      * Valida el acceso a la encuesta mediante token JWT
      */
-    public function validateSurveyAccess(Request $request)
+    public function validateAccess(Request $request)
     {
         try {
             $validator = Validator::make($request->all(), [
@@ -243,7 +243,7 @@ class SurveyEmailController extends Controller
             $respondentName = $request->input('respondent_name');
 
             // Validar el acceso primero
-            $accessValidation = $this->validateSurveyAccess($request);
+            $accessValidation = $this->validateAccess($request);
             if ($accessValidation->getStatusCode() !== 200) {
                 return $accessValidation;
             }

@@ -336,7 +336,7 @@ class TemporarySurveyController extends Controller
             $surveyData = [
                 'title' => $temporarySurvey->title,
                 'descrip' => $temporarySurvey->description,
-                'id_category' => $temporarySurvey->categories ?: null,
+                'id_category' => $this->extractCategoryId($temporarySurvey->categories),
                 'status' => true,
                 'publication_status' => 'published',
                 'user_create' => Auth::user()->name ?? Auth::user()->email ?? 'system',
@@ -394,7 +394,7 @@ class TemporarySurveyController extends Controller
                 $question = \App\Models\QuestionModel::create([
                     'title' => $questionData['title'] ?? 'Pregunta sin título',
                     'descrip' => $questionData['description'] ?? '',
-                    'validate' => $questionData['validation'] ?? 'Opcional',
+                    'validate' => ($questionData['mandatory'] ?? false) ? 'Requerido' : 'Opcional',
                     'cod_padre' => 0, // Parent questions have cod_padre = 0
                     'bank' => false,
                     'type_questions_id' => $questionData['questionType'] ?? 1,
@@ -500,7 +500,7 @@ class TemporarySurveyController extends Controller
                 $childQuestion = \App\Models\QuestionModel::create([
                     'title' => $questionData['title'] ?? 'Pregunta hija sin título',
                     'descrip' => $questionData['description'] ?? '',
-                    'validate' => $questionData['validation'] ?? 'Opcional',
+                    'validate' => ($questionData['mandatory'] ?? false) ? 'Requerido' : 'Opcional',
                     'cod_padre' => $parentId, // Map to actual parent question ID
                     'bank' => false,
                     'type_questions_id' => $questionData['questionType'] ?? 1,
@@ -590,5 +590,31 @@ class TemporarySurveyController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Extract category ID from the categories JSON array
+     */
+    private function extractCategoryId($categories)
+    {
+        if (!$categories) {
+            return null;
+        }
+
+        // If it's a string, decode it
+        if (is_string($categories)) {
+            $categories = json_decode($categories, true);
+        }
+
+        // If it's an array and has data
+        if (is_array($categories) && count($categories) > 0) {
+            // Categories are stored as [["id", "name", "description"]]
+            $firstCategory = $categories[0];
+            if (is_array($firstCategory) && count($firstCategory) > 0) {
+                return (int) $firstCategory[0]; // Return the ID as integer
+            }
+        }
+
+        return null;
     }
 }

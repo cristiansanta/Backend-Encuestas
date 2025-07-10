@@ -60,7 +60,7 @@ Route::post('notification-test/store', [NotificationSurvaysController::class, 's
 
 // Rutas públicas para acceso a encuestas por correo (sin autenticación)
 Route::prefix('survey-email')->controller(SurveyEmailController::class)->group(function () {
-    Route::post('/validate-access', 'validateSurveyAccess')->name('survey.email.validate');
+    Route::post('/validate-access', 'validateAccess')->name('survey.email.validate');
     Route::post('/submit-response', 'submitSurveyResponse')->name('survey.email.submit');
     Route::post('/check-status', 'checkResponseStatus')->name('survey.email.status');
 });

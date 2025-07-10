@@ -13,6 +13,7 @@ use HTMLPurifier_Config;
 use function PHPSTORM_META\type;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
+use App\Http\Controllers\SectionController;
 
 
 class SurveyController extends Controller
@@ -76,6 +77,34 @@ class SurveyController extends Controller
             $data['end_date'] = $tomorrow->format('Y-m-d H:i:s');
         }
         
+        // FIXED: Additional validation for invalid titles (console warnings)
+        $invalidTitlePatterns = [
+            '/\[Deprecation\]/',
+            '/DOMNodeInserted/',
+            '/mutation event/',
+            '/Listener added for a/',
+            '/event type has been removed/',
+            '/findDOMNode is deprecated/'
+        ];
+        
+        $hasInvalidTitle = false;
+        if (isset($data['title'])) {
+            foreach ($invalidTitlePatterns as $pattern) {
+                if (preg_match($pattern, $data['title'])) {
+                    $hasInvalidTitle = true;
+                    break;
+                }
+            }
+        }
+        
+        if ($hasInvalidTitle) {
+            return response()->json([
+                'error' => 'Error de validación',
+                'details' => ['title' => ['El título contiene caracteres o mensajes no válidos.']],
+                'message' => 'El título de la encuesta contiene caracteres o mensajes no válidos.'
+            ], 422);
+        }
+
         // Validar los datos entrantes (incluyendo fechas por defecto)
         $validator = Validator::make($data, [
             'title' => 'required|string|max:255',
@@ -398,9 +427,6 @@ class SurveyController extends Controller
     try {
         $survey = SurveyModel::with([
             'category',
-            'sections' => function($query) {
-                $query->orderBy('id');
-            },
             'surveyQuestions.question.type',
             'surveyQuestions.question.options',
             'surveyQuestions.question.conditions',
@@ -415,6 +441,17 @@ class SurveyController extends Controller
         if (!$survey) {
             return response()->json(['message' => 'Survey not found'], 404);
         }
+
+        // FIXED: Obtener secciones usando el método correcto que incluye secciones del banco
+        $sectionsController = new SectionController();
+        $sectionsResponse = $sectionsController->getSectionsBySurvey($id);
+        $sectionsData = $sectionsResponse->getData();
+        
+        // Convertir a Collection para mantener compatibilidad
+        $allSections = collect($sectionsData);
+        
+        // Asignar las secciones al survey
+        $survey->setRelation('sections', $allSections);
 
         // Log información de debug con detalles de secciones y preguntas
         $sectionDetails = $survey->sections->map(function($section) {
