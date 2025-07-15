@@ -103,24 +103,32 @@ public function store(Request $request)
         }
     }
 
-    // TEMPORALMENTE DESHABILITADO - Verificar si ya existe un registro similar para este usuario
-    // La detección de duplicados está interfiriendo con opciones personalizadas
-    /*
+    // MEJORADO: Verificar si ya existe un registro similar para este usuario
+    // Detección de duplicados robusta que considera contexto de sección
     $existingQuestion = QuestionModel::where('title', $data['title'])
                                       ->where('descrip', $data['descrip'])
                                       ->where('type_questions_id', $data['type_questions_id'])
-                                      ->where('questions_conditions', $data['questions_conditions'])
                                       ->where('creator_id', $user->id)
+                                      ->where('section_id', $data['section_id'])
                                       ->first();
 
     if ($existingQuestion) {
+        // Log para debugging
+        \Log::info('Question duplicate detected', [
+            'existing_id' => $existingQuestion->id,
+            'existing_title' => $existingQuestion->title,
+            'requested_title' => $data['title'],
+            'section_id' => $data['section_id'],
+            'user_id' => $user->id
+        ]);
+        
         return response()->json([
             'id' => $existingQuestion->id,
-            'message' => 'La pregunta ya fue creada exitosamente',
-            'existing' => true
-        ], 201);
+            'message' => 'La pregunta ya fue creada exitosamente (duplicado detectado)',
+            'existing' => true,
+            'duplicate_reason' => 'same_title_description_type_section'
+        ], 200);
     }
-    */
 
     try {
         // Separar las opciones de los datos de la pregunta
