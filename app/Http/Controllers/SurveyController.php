@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\SurveyModel;
+use App\Models\CategoryModel;
 use Illuminate\Support\Facades\Validator;
 use Closure;
 use Symfony\Component\HttpFoundation\Response;
