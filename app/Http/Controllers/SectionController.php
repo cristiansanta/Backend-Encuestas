@@ -96,8 +96,9 @@ class SectionController extends Controller
                                     }
                                  })
                                  ->where(function($q) use ($data) {
-                                    // Verificar solo por título exacto para evitar falsos positivos
-                                    $q->where('title', trim($data['title']));
+                                    // Verificar por título con normalización mejorada (case-insensitive y whitespace)
+                                    $normalizedTitle = strtolower(preg_replace('/\s+/', ' ', trim($data['title'])));
+                                    $q->whereRaw('LOWER(REGEXP_REPLACE(TRIM(title), "[[:space:]]+", " ")) = ?', [$normalizedTitle]);
                                  })
                                  ->lockForUpdate(); // Bloquear para evitar inserciones simultáneas
             
