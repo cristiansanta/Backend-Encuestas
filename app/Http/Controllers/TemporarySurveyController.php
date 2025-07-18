@@ -396,7 +396,7 @@ class TemporarySurveyController extends Controller
                     'descrip' => $questionData['description'] ?? '',
                     'validate' => ($questionData['mandatory'] ?? false) ? 'Requerido' : 'Opcional',
                     'cod_padre' => 0, // Parent questions have cod_padre = 0
-                    'bank' => false,
+                    'bank' => true, // Save to question bank for reuse
                     'type_questions_id' => $questionData['questionType'] ?? 1,
                     'creator_id' => Auth::id(),
                     'questions_conditions' => false, // Parent questions don't have conditions
@@ -502,7 +502,7 @@ class TemporarySurveyController extends Controller
                     'descrip' => $questionData['description'] ?? '',
                     'validate' => ($questionData['mandatory'] ?? false) ? 'Requerido' : 'Opcional',
                     'cod_padre' => $parentId, // Map to actual parent question ID
-                    'bank' => false,
+                    'bank' => true, // Save to question bank for reuse
                     'type_questions_id' => $questionData['questionType'] ?? 1,
                     'creator_id' => Auth::id(),
                     'questions_conditions' => true, // Child questions have conditions

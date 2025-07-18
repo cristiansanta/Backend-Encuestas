@@ -60,19 +60,19 @@ class CategoryController extends Controller
         $data = $request->all();
         $data['user_create'] = $user->name; // Agregar el usuario creador
 
-        // Verificar si ya existe un registro con los mismos datos clave para este usuario
+        // Verificar si ya existe una categoría con el mismo título para este usuario
         $existingCategory = CategoryModel::where('title', $data['title'])
-                                         ->where('descrip_cat', $data['descrip_cat'])
                                          ->where('user_create', $user->name)
                                          ->first();
 
         if ($existingCategory) {
             // Si el registro ya existe, devolver un mensaje indicando que ya fue creado
             $response = [
-                'message' => 'La categoría ya fue creada exitosamente',
-                //'category' => $existingCategory->toArray(),
+                'message' => 'Ya existe una categoría con este nombre',
+                'error' => 'duplicate_category',
+                'category_id' => $existingCategory->id
             ];
-            return response()->json($response, 201);
+            return response()->json($response, 409); // 409 Conflict for duplicate
         }
 
         try {
@@ -82,11 +82,12 @@ class CategoryController extends Controller
             // Preparar la respuesta
             $response = [
                 'message' => 'Categoría creada exitosamente',
-                //'category' => $category->toArray(),
+                'category_id' => $category->id,
+                'category' => $category->toArray(),
             ];
 
             // Devolver la respuesta como JSON
-            return response()->json($response, 200);
+            return response()->json($response, 201);
         } catch (\Exception $e) {
             // Capturar cualquier excepción y devolver un error 500
             return response()->json(['error' => 'Error al crear la categoría', 'details' => $e->getMessage()], 500);

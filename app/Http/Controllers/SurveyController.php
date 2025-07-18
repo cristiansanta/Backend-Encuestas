@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\SurveyModel;
+use App\Models\CategoryModel;
 use Illuminate\Support\Facades\Validator;
 use Closure;
 use Symfony\Component\HttpFoundation\Response;
@@ -264,6 +265,17 @@ class SurveyController extends Controller
         }
     
         if ($request->has('id_category')) {
+            // Validar que la categoría existe
+            if ($request->id_category !== null) {
+                $category = CategoryModel::find($request->id_category);
+                if (!$category) {
+                    return response()->json([
+                        'message' => 'Error de validación',
+                        'errors' => ['id_category' => ['La categoría seleccionada no existe']],
+                        'error' => 'La categoría seleccionada no existe. Por favor, selecciona una categoría válida.'
+                    ], 422);
+                }
+            }
             $survey->id_category = $request->id_category;
         }
     
@@ -288,12 +300,37 @@ class SurveyController extends Controller
         }
     
         // Guardar los cambios
-        if ($survey->save()) {
-            \Log::info("SurveyController::update - Encuesta actualizada exitosamente. Nuevo estado: status={$survey->status}, publication_status={$survey->publication_status}");
-            return response()->json(['message' => 'Encuesta actualizada con éxito', 'data' => $survey], 200);
-        } else {
-            \Log::error("SurveyController::update - Error al guardar la encuesta ID: {$id}");
-            return response()->json(['message' => 'Error al actualizar la encuesta'], 500);
+        try {
+            if ($survey->save()) {
+                \Log::info("SurveyController::update - Encuesta actualizada exitosamente. Nuevo estado: status={$survey->status}, publication_status={$survey->publication_status}");
+                return response()->json(['message' => 'Encuesta actualizada con éxito', 'data' => $survey], 200);
+            } else {
+                \Log::error("SurveyController::update - Error al guardar la encuesta ID: {$id}");
+                return response()->json(['message' => 'Error al actualizar la encuesta'], 500);
+            }
+        } catch (\Illuminate\Database\QueryException $e) {
+            \Log::error("SurveyController::update - Error de base de datos: " . $e->getMessage());
+            
+            // Manejar errores específicos de foreign key
+            if (strpos($e->getMessage(), '23503') !== false) {
+                if (strpos($e->getMessage(), 'id_category') !== false) {
+                    return response()->json([
+                        'message' => 'Error de validación',
+                        'errors' => ['id_category' => ['La categoría seleccionada no existe']],
+                        'error' => 'La categoría seleccionada no existe. Por favor, selecciona una categoría válida.'
+                    ], 422);
+                } else {
+                    return response()->json([
+                        'message' => 'Error de validación',
+                        'error' => 'Los datos proporcionados no son válidos. Verifica que todas las referencias existan.'
+                    ], 422);
+                }
+            }
+            
+            return response()->json([
+                'message' => 'Error al actualizar la encuesta',
+                'error' => 'Ocurrió un error al procesar tu solicitud. Por favor, intenta nuevamente.'
+            ], 500);
         }
     }
     

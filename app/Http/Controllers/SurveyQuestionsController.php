@@ -47,7 +47,7 @@ class SurveyQuestionsController extends Controller
         $validator = Validator::make($request->all(), [
             'survey_id' => 'required|integer',
             'question_id' => 'required|integer',
-            'section_id' => 'required|integer',
+            'section_id' => 'nullable|integer',
             'creator_id' => 'required|integer',
             'status' => 'required|boolean', // Acepta 0,1,true,false
             'user_id' => 'required|integer',
@@ -147,7 +147,7 @@ class SurveyQuestionsController extends Controller
             $request->validate([
             'survey_id' => 'required|integer',
             'question_id' => 'required|integer',
-            'section_id' => 'required|integer',
+            'section_id' => 'nullable|integer',
             'creator_id' => 'required|integer',
             'status' => 'required|boolean',
             'user_id' => 'required|integer',
