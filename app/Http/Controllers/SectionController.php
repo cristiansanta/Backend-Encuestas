@@ -98,7 +98,7 @@ class SectionController extends Controller
                                  ->where(function($q) use ($data) {
                                     // Verificar por título con normalización mejorada (case-insensitive y whitespace)
                                     $normalizedTitle = strtolower(preg_replace('/\s+/', ' ', trim($data['title'])));
-                                    $q->whereRaw('LOWER(REGEXP_REPLACE(TRIM(title), "[[:space:]]+", " ")) = ?', [$normalizedTitle]);
+                                    $q->whereRaw('LOWER(REGEXP_REPLACE(TRIM(title), \'[[:space:]]+\', \' \', \'g\')) = ?', [$normalizedTitle]);
                                  })
                                  ->lockForUpdate(); // Bloquear para evitar inserciones simultáneas
             
