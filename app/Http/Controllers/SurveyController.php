@@ -736,21 +736,56 @@ private function updateSurveyStatusBasedOnDates($survey)
 
     /**
      * Obtener lista de encuestas para envío masivo
+     * Solo retorna encuestas que están en estado "Activa" o "Próxima a Finalizar"
      */
     public function list()
     {
         try {
-            $surveys = SurveyModel::select('id', 'title', 'descrip', 'status', 'publication_status', 'created_at')
-                ->whereIn('publication_status', ['unpublished', 'published']) // Incluir sin publicar y publicadas
+            $surveys = SurveyModel::select('id', 'title', 'descrip', 'status', 'publication_status', 'created_at', 'start_date', 'end_date')
+                ->where('status', true) // Solo encuestas habilitadas
+                ->where('publication_status', 'published') // Solo encuestas publicadas
+                ->whereNotNull('start_date') // Que tengan fecha de inicio
+                ->whereNotNull('end_date') // Que tengan fecha de fin
                 ->orderBy('created_at', 'desc')
                 ->get()
+                ->filter(function ($survey) {
+                    // Aplicar la lógica de estado basada en fechas
+                    $now = now();
+                    $startDate = $survey->start_date;
+                    $endDate = $survey->end_date;
+                    
+                    // Verificar que la encuesta esté dentro del rango de fechas (activa o próxima a finalizar)
+                    if ($endDate < $now) {
+                        return false; // Encuesta finalizada
+                    }
+                    
+                    if ($startDate > $now) {
+                        return false; // Encuesta aún no comenzada
+                    }
+                    
+                    // Solo incluir encuestas que estén activas o próximas a finalizar
+                    return $startDate <= $now && $now <= $endDate;
+                })
                 ->map(function ($survey) {
+                    // Determinar el estado específico de la encuesta
+                    $now = now();
+                    $endDate = $survey->end_date;
+                    $daysUntilEnd = $now->diffInDays($endDate, false);
+                    
+                    $surveyStatus = 'Activa';
+                    if ($daysUntilEnd <= 3 && $daysUntilEnd >= 0) {
+                        $surveyStatus = 'Próxima a Finalizar';
+                    }
+                    
                     return [
                         'id' => $survey->id,
                         'title' => $survey->title,
                         'description' => $survey->descrip,
                         'status' => $survey->status,
                         'publication_status' => $survey->publication_status,
+                        'survey_status' => $surveyStatus,
+                        'start_date' => $survey->start_date,
+                        'end_date' => $survey->end_date,
                         'created_at' => $survey->created_at
                     ];
                 });
