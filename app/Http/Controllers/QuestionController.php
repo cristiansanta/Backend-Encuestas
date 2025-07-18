@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\QuestionModel;
 use App\Models\QuestionsoptionsModel;
+use App\Services\QuestionIntegrityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
@@ -135,7 +136,36 @@ public function store(Request $request)
         $options = $request->input('options', []);
         unset($data['options']); // Remover opciones de los datos de la pregunta
         
+        // Validar integridad antes de crear
+        try {
+            QuestionIntegrityService::validateQuestionType($data['type_questions_id']);
+            
+            // Validar referencial integrity para sección
+            if ($data['section_id']) {
+                $sectionExists = DB::table('sections')->where('id', $data['section_id'])->exists();
+                if (!$sectionExists) {
+                    return response()->json(['error' => 'Error de integridad referencial', 'details' => 'La sección especificada no existe'], 422);
+                }
+            }
+            
+            // Validar referencial integrity para pregunta padre
+            if ($data['cod_padre'] && $data['cod_padre'] > 0) {
+                $parentExists = QuestionModel::where('id', $data['cod_padre'])
+                    ->where('creator_id', $user->id)
+                    ->exists();
+                if (!$parentExists) {
+                    return response()->json(['error' => 'Error de integridad referencial', 'details' => 'La pregunta padre especificada no existe o no pertenece al usuario'], 422);
+                }
+            }
+            
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'Error de validación de tipo', 'details' => $e->getMessage()], 422);
+        }
+        
         $question = QuestionModel::create($data);
+        
+        // Auditoría después de crear
+        QuestionIntegrityService::auditQuestionIntegrityChange('CREATE', null, $question, $user->id);
         
         // Crear opciones si fueron proporcionadas
         if (!empty($options) && is_array($options)) {
@@ -208,6 +238,9 @@ public function store(Request $request)
         $question = QuestionModel::find($id);
     
         if ($question) {
+            // Crear copia para auditoría
+            $questionBefore = clone $question;
+            
             if ($request->has('cod_padre') && count($request->all()) === 1) {
                 $request->validate([
                     'cod_padre' => 'required|integer',
@@ -232,6 +265,33 @@ public function store(Request $request)
                     'mother_answer_condition' => 'nullable|string|max:500',
                     'section_id' => 'nullable|integer',
                 ]);
+                
+                // Validar integridad del tipo antes de actualizar
+                if ($request->has('type_questions_id')) {
+                    try {
+                        QuestionIntegrityService::validateQuestionType($request->type_questions_id);
+                    } catch (\InvalidArgumentException $e) {
+                        return response()->json(['error' => 'Error de validación de tipo', 'details' => $e->getMessage()], 422);
+                    }
+                }
+                
+                // Validar referencial integrity para sección
+                if ($request->has('section_id') && $request->section_id) {
+                    $sectionExists = DB::table('sections')->where('id', $request->section_id)->exists();
+                    if (!$sectionExists) {
+                        return response()->json(['error' => 'Error de integridad referencial', 'details' => 'La sección especificada no existe'], 422);
+                    }
+                }
+                
+                // Validar referencial integrity para pregunta padre
+                if ($request->has('cod_padre') && $request->cod_padre && $request->cod_padre > 0) {
+                    $parentExists = QuestionModel::where('id', $request->cod_padre)
+                        ->where('creator_id', $request->user()->id ?? $question->creator_id)
+                        ->exists();
+                    if (!$parentExists) {
+                        return response()->json(['error' => 'Error de integridad referencial', 'details' => 'La pregunta padre especificada no existe o no pertenece al usuario'], 422);
+                    }
+                }
     
                 // Actualizar todos los campos
                 $question->title = $request->title;
@@ -246,6 +306,9 @@ public function store(Request $request)
             }
     
             if ($question->save()) {
+                // Auditoría después de actualizar
+                QuestionIntegrityService::auditQuestionIntegrityChange('UPDATE', $questionBefore, $question, $request->user()->id ?? null);
+                
                 return response()->json(['message' => 'Actualizado con éxito'], 200);
             } else {
                 return response()->json(['message' => 'Error al actualizar'], 500);
