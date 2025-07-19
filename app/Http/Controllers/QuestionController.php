@@ -105,12 +105,12 @@ public function store(Request $request)
     }
 
     // MEJORADO: Verificar si ya existe un registro similar para este usuario
-    // Detección de duplicados robusta que considera contexto de sección
+    // Detección de duplicados robusta que NO considera contexto de sección
+    // Una pregunta es duplicada por contenido, independientemente de su sección
     $existingQuestion = QuestionModel::where('title', $data['title'])
                                       ->where('descrip', $data['descrip'])
                                       ->where('type_questions_id', $data['type_questions_id'])
                                       ->where('creator_id', $user->id)
-                                      ->where('section_id', $data['section_id'])
                                       ->first();
 
     if ($existingQuestion) {
@@ -118,16 +118,18 @@ public function store(Request $request)
         \Log::info('Question duplicate detected', [
             'existing_id' => $existingQuestion->id,
             'existing_title' => $existingQuestion->title,
+            'existing_section_id' => $existingQuestion->section_id,
             'requested_title' => $data['title'],
-            'section_id' => $data['section_id'],
+            'requested_section_id' => $data['section_id'],
             'user_id' => $user->id
         ]);
         
         return response()->json([
             'id' => $existingQuestion->id,
-            'message' => 'La pregunta ya fue creada exitosamente (duplicado detectado)',
+            'message' => 'La pregunta ya fue creada exitosamente (duplicado detectado por contenido)',
             'existing' => true,
-            'duplicate_reason' => 'same_title_description_type_section'
+            'duplicate_reason' => 'same_title_description_type',
+            'note' => 'Las preguntas duplicadas se detectan por contenido, no por sección'
         ], 200);
     }
 
