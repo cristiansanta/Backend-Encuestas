@@ -224,6 +224,11 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::delete('/{id}', 'destroy')->name('surveyquestion.destroy');
     });
     
+    // Alternative route for frontend compatibility
+    Route::prefix('survey-questions')->controller(SurveyQuestionsController::class)->group(function () {
+        Route::delete('/{id}', 'destroy')->name('survey-questions.destroy');
+    });
+    
     
     Route::prefix('questionoptions')->controller(QuestionsoptionsController::class)->group(function () {
         Route::get('/', 'index')->name('questionoptions.index');
