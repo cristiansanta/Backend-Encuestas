@@ -25,7 +25,7 @@ yarn-error.log
 composer.lock
 
 # Ignorar migraciones específicas
-database/migrations/*.php
+#database/migrations/*.php
 
 # O si quieres ignorar todas las migraciones:
 # database/migrations/*
