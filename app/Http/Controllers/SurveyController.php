@@ -6,6 +6,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\SurveyModel;
 use App\Models\CategoryModel;
+use App\Services\QuestionIntegrityService;
 use Illuminate\Support\Facades\Validator;
 use Closure;
 use Symfony\Component\HttpFoundation\Response;
@@ -239,6 +240,18 @@ class SurveyController extends Controller
             return response()->json(['message' => 'Error de validación', 'errors' => $validator->errors()], 422);
         }
         
+        // Verificar integridad de preguntas antes de cambios de estado críticos
+        if ($request->has('publication_status') && $request->publication_status === 'published') {
+            $integrityCheck = $this->validateSurveyQuestionsIntegrity($survey);
+            if (!$integrityCheck['is_valid']) {
+                \Log::error("SurveyController::update - Integridad de preguntas fallida para encuesta ID: {$id}", $integrityCheck['errors']);
+                return response()->json([
+                    'message' => 'No se puede publicar la encuesta debido a problemas de integridad en las preguntas',
+                    'errors' => $integrityCheck['errors']
+                ], 422);
+            }
+        }
+        
         // Si se está actualizando el título, validar que no exista otra encuesta con el mismo título para el mismo usuario
         if ($request->has('title') && $request->title !== $survey->title) {
             $existingSurvey = SurveyModel::where('title', $request->title)
@@ -284,7 +297,40 @@ class SurveyController extends Controller
         }
         
         if ($request->has('publication_status')) {
-            $survey->publication_status = $request->publication_status;
+            // Usar transacción para cambio de estado crítico
+            DB::beginTransaction();
+            try {
+                $oldStatus = $survey->publication_status;
+                $newStatus = $request->publication_status;
+                
+                // Registrar auditoría del cambio de estado
+                \Log::info("SurveyController::update - Changing publication status", [
+                    'survey_id' => $survey->id,
+                    'old_status' => $oldStatus,
+                    'new_status' => $newStatus,
+                    'user' => $request->user()->name ?? 'unknown'
+                ]);
+                
+                $survey->publication_status = $newStatus;
+                $survey->save();
+                
+                // Verificar que el cambio se realizó correctamente
+                $survey->refresh();
+                if ($survey->publication_status !== $newStatus) {
+                    throw new \Exception("El estado de publicación no se actualizó correctamente");
+                }
+                
+                DB::commit();
+                \Log::info("SurveyController::update - Publication status updated successfully");
+                
+            } catch (\Exception $e) {
+                DB::rollback();
+                \Log::error("SurveyController::update - Failed to update publication status: " . $e->getMessage());
+                return response()->json([
+                    'message' => 'Error al actualizar el estado de publicación',
+                    'error' => $e->getMessage()
+                ], 500);
+            }
         }
         
         if ($request->has('user_create')) {
@@ -736,21 +782,56 @@ private function updateSurveyStatusBasedOnDates($survey)
 
     /**
      * Obtener lista de encuestas para envío masivo
+     * Solo retorna encuestas que están en estado "Activa" o "Próxima a Finalizar"
      */
     public function list()
     {
         try {
-            $surveys = SurveyModel::select('id', 'title', 'descrip', 'status', 'publication_status', 'created_at')
-                ->whereIn('publication_status', ['unpublished', 'published']) // Incluir sin publicar y publicadas
+            $surveys = SurveyModel::select('id', 'title', 'descrip', 'status', 'publication_status', 'created_at', 'start_date', 'end_date')
+                ->where('status', true) // Solo encuestas habilitadas
+                ->where('publication_status', 'published') // Solo encuestas publicadas
+                ->whereNotNull('start_date') // Que tengan fecha de inicio
+                ->whereNotNull('end_date') // Que tengan fecha de fin
                 ->orderBy('created_at', 'desc')
                 ->get()
+                ->filter(function ($survey) {
+                    // Aplicar la lógica de estado basada en fechas
+                    $now = now();
+                    $startDate = $survey->start_date;
+                    $endDate = $survey->end_date;
+                    
+                    // Verificar que la encuesta esté dentro del rango de fechas (activa o próxima a finalizar)
+                    if ($endDate < $now) {
+                        return false; // Encuesta finalizada
+                    }
+                    
+                    if ($startDate > $now) {
+                        return false; // Encuesta aún no comenzada
+                    }
+                    
+                    // Solo incluir encuestas que estén activas o próximas a finalizar
+                    return $startDate <= $now && $now <= $endDate;
+                })
                 ->map(function ($survey) {
+                    // Determinar el estado específico de la encuesta
+                    $now = now();
+                    $endDate = $survey->end_date;
+                    $daysUntilEnd = $now->diffInDays($endDate, false);
+                    
+                    $surveyStatus = 'Activa';
+                    if ($daysUntilEnd <= 3 && $daysUntilEnd >= 0) {
+                        $surveyStatus = 'Próxima a Finalizar';
+                    }
+                    
                     return [
                         'id' => $survey->id,
                         'title' => $survey->title,
                         'description' => $survey->descrip,
                         'status' => $survey->status,
                         'publication_status' => $survey->publication_status,
+                        'survey_status' => $surveyStatus,
+                        'start_date' => $survey->start_date,
+                        'end_date' => $survey->end_date,
                         'created_at' => $survey->created_at
                     ];
                 });
@@ -1162,6 +1243,79 @@ private function updateSurveyStatesAutomatic()
     } catch (\Exception $e) {
         // Fallar silenciosamente para no interrumpir la consulta principal
         \Log::error("Error in updateSurveyStatesAutomatic: " . $e->getMessage());
+    }
+}
+
+/**
+ * Validar integridad de preguntas de una encuesta
+ */
+private function validateSurveyQuestionsIntegrity($survey)
+{
+    $errors = [];
+    $warnings = [];
+    
+    try {
+        // Obtener preguntas asociadas a la encuesta
+        $questions = DB::table('survey_questions')
+            ->join('questions', 'survey_questions.question_id', '=', 'questions.id')
+            ->join('type_questions', 'questions.type_questions_id', '=', 'type_questions.id')
+            ->where('survey_questions.survey_id', $survey->id)
+            ->select(
+                'questions.*',
+                'type_questions.title as type_title',
+                'survey_questions.section_id as pivot_section_id'
+            )
+            ->get();
+        
+        if ($questions->isEmpty()) {
+            $errors[] = 'La encuesta no tiene preguntas asociadas';
+            return ['is_valid' => false, 'errors' => $errors, 'warnings' => $warnings];
+        }
+        
+        foreach ($questions as $question) {
+            // Usar el servicio de integridad para validación completa
+            $validation = QuestionIntegrityService::validateQuestionIntegrity($question);
+            
+            if (!$validation['is_valid']) {
+                foreach ($validation['errors'] as $error) {
+                    $errors[] = "Pregunta '{$question->title}': {$error}";
+                }
+            }
+            
+            foreach ($validation['warnings'] as $warning) {
+                $warnings[] = "Pregunta '{$question->title}': {$warning}";
+            }
+            
+            // Validar que las preguntas de opción múltiple/única tengan opciones
+            if (in_array($question->type_questions_id, [3, 4])) { // Opción única y múltiple
+                $optionsCount = DB::table('questionsoptions')
+                    ->where('questions_id', $question->id)
+                    ->count();
+                
+                if ($optionsCount === 0) {
+                    $errors[] = "Pregunta '{$question->title}' de tipo '{$question->type_title}' no tiene opciones definidas";
+                }
+            }
+            
+            // Validar asociación con sección
+            if ($question->section_id && !$question->pivot_section_id) {
+                $warnings[] = "Pregunta '{$question->title}' está asociada a sección {$question->section_id} pero no en la tabla pivot";
+            }
+        }
+        
+        return [
+            'is_valid' => empty($errors),
+            'errors' => $errors,
+            'warnings' => $warnings
+        ];
+        
+    } catch (\Exception $e) {
+        \Log::error("Error validating survey questions integrity: " . $e->getMessage());
+        return [
+            'is_valid' => false,
+            'errors' => ['Error interno validando integridad de preguntas: ' . $e->getMessage()],
+            'warnings' => []
+        ];
     }
 }
 

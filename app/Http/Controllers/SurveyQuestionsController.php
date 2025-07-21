@@ -68,21 +68,56 @@ class SurveyQuestionsController extends Controller
         $data = $request->all();
 
         // Verificar si ya existe un registro con los mismos datos clave
+        // MEJORADO: Permitir la misma pregunta en diferentes secciones, pero prevenir duplicados exactos
         $existingsq = SurveyquestionsModel::where('survey_id', $data['survey_id'])
                                          ->where('question_id', $data['question_id'])
                                          ->where('section_id', $data['section_id'])
                                          ->first();
+        
         if ($existingsq) {
-            // Si el registro ya existe, devolver un mensaje indicando que ya fue creado
+            // Log para debugging - registro exactamente duplicado
+            \Log::info('SurveyQuestion exact duplicate detected', [
+                'existing_id' => $existingsq->id,
+                'survey_id' => $data['survey_id'],
+                'question_id' => $data['question_id'],
+                'section_id' => $data['section_id']
+            ]);
+            
+            // Si el registro ya existe EXACTAMENTE, devolver un mensaje indicando que ya fue creado
             $response = [
-                'message' => 'el registro ya fue creada exitosamente (duplicado detectado)',
+                'message' => 'El registro ya fue creado exitosamente (duplicado exacto detectado)',
                 'id' => $existingsq->id,
                 'survey_id' => $existingsq->survey_id,
                 'question_id' => $existingsq->question_id,
                 'section_id' => $existingsq->section_id,
-                'already_exists' => true
+                'already_exists' => true,
+                'duplicate_type' => 'exact_match'
             ];
             return response()->json($response, 200);
+        }
+        
+        // Verificar si existe la misma pregunta en diferente sección (solo informativo)
+        $existingInDifferentSection = SurveyquestionsModel::where('survey_id', $data['survey_id'])
+                                                         ->where('question_id', $data['question_id'])
+                                                         ->where(function($query) use ($data) {
+                                                             if ($data['section_id'] === null) {
+                                                                 $query->whereNotNull('section_id');
+                                                             } else {
+                                                                 $query->where('section_id', '!=', $data['section_id'])
+                                                                       ->orWhereNull('section_id');
+                                                             }
+                                                         })
+                                                         ->first();
+        
+        if ($existingInDifferentSection) {
+            // Log informativo - misma pregunta en diferente sección (esto es permitido)
+            \Log::info('SurveyQuestion cross-section detected (allowed)', [
+                'existing_id' => $existingInDifferentSection->id,
+                'existing_section_id' => $existingInDifferentSection->section_id,
+                'new_section_id' => $data['section_id'],
+                'question_id' => $data['question_id'],
+                'survey_id' => $data['survey_id']
+            ]);
         }
 
         try {
