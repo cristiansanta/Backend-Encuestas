@@ -11,8 +11,11 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('notificationsurvays', function (Blueprint $table) {
-            // $table->json('response_data')->nullable()->after('respondent_name'); // Ya existe en la migración de creación
+        Schema::create('type_questions', function (Blueprint $table) {
+            $table->id();
+            $table->string('title');
+            $table->text('descrip')->nullable();
+            $table->timestamps();
         });
     }
 
@@ -21,8 +24,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('notificationsurvays', function (Blueprint $table) {
-            $table->dropColumn(['response_data']);
-        });
+        Schema::dropIfExists('type_questions');
     }
 };
