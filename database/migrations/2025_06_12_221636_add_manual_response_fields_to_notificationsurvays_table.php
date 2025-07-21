@@ -12,7 +12,8 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('notificationsurvays', function (Blueprint $table) {
-            // $table->json('response_data')->nullable()->after('respondent_name'); // Ya existe en la migración de creación
+            $table->string('respondent_name')->nullable()->after('email');
+            $table->json('response_data')->nullable()->after('respondent_name');
         });
     }
 
@@ -22,7 +23,7 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('notificationsurvays', function (Blueprint $table) {
-            $table->dropColumn(['response_data']);
+            $table->dropColumn(['respondent_name', 'response_data']);
         });
     }
 };
