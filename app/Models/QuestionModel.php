@@ -20,7 +20,8 @@ class QuestionModel extends Model
         'creator_id',
         'questions_conditions',
         'mother_answer_condition',
-        'section_id'
+        'section_id',
+        'related_question'
      ];
  
 
