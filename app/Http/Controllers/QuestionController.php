@@ -87,6 +87,11 @@ public function store(Request $request)
     $data = $request->all();
     // Asignar automáticamente el creator_id del usuario autenticado
     $data['creator_id'] = $user->id;
+    
+    // Asignar valor por defecto para related_question si no se proporciona
+    if (!isset($data['related_question'])) {
+        $data['related_question'] = '';
+    }
 
     // Buscar y decodificar imágenes en base64 dentro de la descripción
     if (preg_match_all('/<img src="data:image\/[^;]+;base64,([^"]+)"/', $data['descrip'], $matches)) {
