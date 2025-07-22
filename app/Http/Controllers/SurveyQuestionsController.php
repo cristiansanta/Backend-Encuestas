@@ -43,15 +43,18 @@ class SurveyQuestionsController extends Controller
      */
     public function store(Request $request)
     {
-        // Validar los datos recibidos
+        // Validar los datos recibidos - MEJORADO para aceptar tanto boolean como integer para status
         $validator = Validator::make($request->all(), [
             'survey_id' => 'required|integer',
             'question_id' => 'required|integer',
-            'section_id' => 'required|integer',
+            'section_id' => 'nullable|integer',
             'creator_id' => 'required|integer',
-            'status' => 'required|boolean',
+            'status' => 'required|boolean', // Acepta 0,1,true,false
             'user_id' => 'required|integer',
         ]);
+
+        // Log datos recibidos para debugging
+        \Log::info('SurveyQuestionsController - Datos recibidos:', $request->all());
 
         // Si la validación falla, devolver un mensaje de error
         if ($validator->fails()) {
@@ -65,25 +68,69 @@ class SurveyQuestionsController extends Controller
         $data = $request->all();
 
         // Verificar si ya existe un registro con los mismos datos clave
+        // MEJORADO: Permitir la misma pregunta en diferentes secciones, pero prevenir duplicados exactos
         $existingsq = SurveyquestionsModel::where('survey_id', $data['survey_id'])
                                          ->where('question_id', $data['question_id'])
                                          ->where('section_id', $data['section_id'])
                                          ->first();
+        
         if ($existingsq) {
-            // Si el registro ya existe, devolver un mensaje indicando que ya fue creado
+            // Log para debugging - registro exactamente duplicado
+            \Log::info('SurveyQuestion exact duplicate detected', [
+                'existing_id' => $existingsq->id,
+                'survey_id' => $data['survey_id'],
+                'question_id' => $data['question_id'],
+                'section_id' => $data['section_id']
+            ]);
+            
+            // Si el registro ya existe EXACTAMENTE, devolver un mensaje indicando que ya fue creado
             $response = [
-                'message' => 'el registro ya fue creada exitosamente',
+                'message' => 'El registro ya fue creado exitosamente (duplicado exacto detectado)',
+                'id' => $existingsq->id,
+                'survey_id' => $existingsq->survey_id,
+                'question_id' => $existingsq->question_id,
+                'section_id' => $existingsq->section_id,
+                'already_exists' => true,
+                'duplicate_type' => 'exact_match'
             ];
-            return response()->json($response, 201);
+            return response()->json($response, 200);
+        }
+        
+        // Verificar si existe la misma pregunta en diferente sección (solo informativo)
+        $existingInDifferentSection = SurveyquestionsModel::where('survey_id', $data['survey_id'])
+                                                         ->where('question_id', $data['question_id'])
+                                                         ->where(function($query) use ($data) {
+                                                             if ($data['section_id'] === null) {
+                                                                 $query->whereNotNull('section_id');
+                                                             } else {
+                                                                 $query->where('section_id', '!=', $data['section_id'])
+                                                                       ->orWhereNull('section_id');
+                                                             }
+                                                         })
+                                                         ->first();
+        
+        if ($existingInDifferentSection) {
+            // Log informativo - misma pregunta en diferente sección (esto es permitido)
+            \Log::info('SurveyQuestion cross-section detected (allowed)', [
+                'existing_id' => $existingInDifferentSection->id,
+                'existing_section_id' => $existingInDifferentSection->section_id,
+                'new_section_id' => $data['section_id'],
+                'question_id' => $data['question_id'],
+                'survey_id' => $data['survey_id']
+            ]);
         }
 
         try {
             // Crear una nueva surveyquestions en la base de datos
-            SurveyquestionsModel::create($data);
-            // Preparar la respuesta
+            $surveyQuestion = SurveyquestionsModel::create($data);
+            
+            // Preparar la respuesta INCLUYENDO EL ID
             $response = [
                 'message' => 'Creado exitosamente',
-                //'category' => $surveyquestions->toArray(),
+                'id' => $surveyQuestion->id,
+                'survey_id' => $surveyQuestion->survey_id,
+                'question_id' => $surveyQuestion->question_id,
+                'section_id' => $surveyQuestion->section_id
             ];
 
             // Devolver la respuesta como JSON
@@ -135,7 +182,7 @@ class SurveyQuestionsController extends Controller
             $request->validate([
             'survey_id' => 'required|integer',
             'question_id' => 'required|integer',
-            'section_id' => 'required|integer',
+            'section_id' => 'nullable|integer',
             'creator_id' => 'required|integer',
             'status' => 'required|boolean',
             'user_id' => 'required|integer',

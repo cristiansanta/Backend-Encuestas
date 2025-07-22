@@ -19,6 +19,12 @@ use App\Http\Controllers\ConditionsController;
 use App\Http\Controllers\FileController;
 use App\Http\Controllers\NotificationSurvaysController;
 use App\Http\Controllers\TemporarySurveyController;
+use App\Http\Controllers\GroupController;
+use App\Http\Controllers\AdminCleanupController;
+use App\Http\Controllers\ManualSurveyResponseController;
+use App\Http\Controllers\SurveyEmailController;
+use App\Http\Controllers\SurveyRespondentController;
+use App\Http\Controllers\ContactInfoController;
 
 
 
@@ -28,6 +34,43 @@ Route::get('/storage/images/{filename}', [FileController::class, 'show']);
 Route::post('/login', [AuthController::class, 'login']);
 
 Route::post('newusers/store', [UserController::class, 'store']);
+
+// Contact information endpoint (public)
+Route::get('contact-info', [ContactInfoController::class, 'getContactInfo']);
+
+// Rutas temporales para testing de grupos (sin autenticación)
+Route::prefix('groups-test')->controller(GroupController::class)->group(function () {
+    Route::get('/', 'index');
+    Route::post('/', 'store'); // Crear grupo
+    Route::post('/add-user', 'addUser');
+    Route::post('/add-users', 'addUsers');
+    Route::post('/users', 'addUser'); // Agregar usuario (ruta general)
+    Route::put('/update/{id}', 'update'); // Actualizar grupo
+    Route::put('/{id}', 'update'); // Actualizar grupo (alternativa)
+    Route::get('/{id}/users', 'getGroupUsers');
+    Route::put('/{groupId}/users/{userId}', 'updateUser');
+    Route::delete('/{groupId}/users/{userId}', 'deleteUser');
+    Route::delete('/{id}', 'destroy'); // Eliminar grupo
+    Route::post('/{id}/users', 'addUserToGroup'); // Agregar usuario a grupo específico
+    Route::get('/surveys-list', [SurveyController::class, 'list']);
+});
+
+// Ruta temporal para testing de notificaciones (sin autenticación)
+Route::post('notification-test/store', [NotificationSurvaysController::class, 'store']);
+
+// Rutas públicas para acceso a encuestas por correo (sin autenticación)
+Route::prefix('survey-email')->controller(SurveyEmailController::class)->group(function () {
+    Route::post('/validate-access', 'validateAccess')->name('survey.email.validate');
+    Route::post('/submit-response', 'submitSurveyResponse')->name('survey.email.submit');
+    Route::post('/check-status', 'checkResponseStatus')->name('survey.email.status');
+});
+
+// Rutas públicas para respuestas manuales con validación de token
+Route::prefix('manual-survey')->controller(ManualSurveyResponseController::class)->group(function () {
+    Route::post('/validate-access', 'validateEmailSurveyAccess')->name('manual.survey.validate');
+    Route::post('/submit-with-token', 'storeWithTokenValidation')->name('manual.survey.submit.token');
+});
+
 
 Route::middleware(['auth:sanctum'])->group(function () {
     
@@ -44,10 +87,16 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
 
     Route::post('/getTokenByEmail', [AuthController::class, 'getTokenByEmail']);
+    
+    //obtener usuario actual con roles y permisos
+    Route::get('/current-user', [AuthController::class, 'getCurrentUser']);
 
 
     //asigna los roles  los usuarios //tabla model_has_role
     Route::post('/assign-role', [RoleController::class, 'assignRole']);
+    
+    //reasigna rol a usuario existente (para edición)
+    Route::post('/reassign-role', [RoleController::class, 'reassignRole']);
     
     //asigna los permisos a el rol 
     Route::post('/assign-permission', [RoleController::class, 'assignPermissionsToRole']);
@@ -77,11 +126,14 @@ Route::middleware(['auth:sanctum'])->group(function () {
        // Route::get('/pin', 'pon')->name('surveys.pon');
       
         Route::get('/', 'index')->name('surveys.index');
+        // obtener lista de encuestas para envío masivo
+        Route::get('/list', 'list')->name('surveys.list');
         Route::post('/create', 'create')->name('surveys.create');
         Route::post('/store', 'store')->name('surveys.store');
         Route::get('/{id}', 'show')->name('surveys.show');
         Route::put('/update/{id}', 'update')->name('surveys.update');
-        Route::put('/{id}', 'destroy')->name('surveys.destroy');
+        Route::put('/update-publication-status/{id}', 'updatePublicationStatus')->name('surveys.updatePublicationStatus');
+        Route::delete('/{id}', 'destroy')->name('surveys.destroy');
         //la encuesta a que seccion pertenece
         Route::get('/{id}/sections', 'showSections')->name('surveys.showSections');
          //la encuesta que preguntas contiene
@@ -92,6 +144,19 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/{id}/sections/details', 'getSurveySections')->name('surveys.getSurveySections');
          // obtener una encuesta completa con sus relaciones
         Route::get('/{id}/details', 'getSurveyDetails')->name('surveys.getSurveyDetails');
+        // obtener el conteo de respuestas de una encuesta
+        Route::get('/{id}/responses/count', 'getResponsesCount')->name('surveys.getResponsesCount');
+        // debug relaciones de una encuesta
+        Route::get('/{id}/debug', 'debugSurveyRelations')->name('surveys.debugSurveyRelations');
+        // reparar relaciones de una encuesta específica
+        Route::post('/{id}/repair', 'repairSurveyQuestions')->name('surveys.repairSurveyQuestions');
+        // verificar y reparar relaciones
+        Route::get('/repair-relations', 'repairSurveyRelations')->name('surveys.repairSurveyRelations');
+        // migrar estados de encuestas basados en fechas
+        Route::post('/migrate-states', 'migrateSurveyStates')->name('surveys.migrateSurveyStates');
+        // nuevos endpoints para auto-reparación
+        Route::get('/{id}/debug-relations', 'debugRelations')->name('surveys.debugRelations');
+        Route::post('/{id}/repair-questions', 'repairQuestions')->name('surveys.repairQuestions');
 
 
     });
@@ -102,7 +167,9 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::post('/store', 'store')->name('Notification.store');
         Route::put('/{id}', 'update')->name('Notification.update');
         Route::get('/download', 'download')->name('Notification.download');
-  
+        Route::get('/download-respondents-template', 'downloadRespondentsTemplate')->name('Notification.downloadRespondentsTemplate');
+        Route::post('/generate-email-links', 'generateSurveyEmailLinks')->name('Notification.generateEmailLinks');
+        Route::post('/survey-status', 'getSurveyNotificationStatus')->name('Notification.surveyStatus');
     });
 
 
@@ -125,7 +192,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/{id}', 'show')->name('sections.show');
         Route::put('/{id}', 'update')->name('sections.update');
         Route::delete('/{id}', 'destroy')->name('sections.destroy');
-        Route::get('/survey/{id_survey}','getSectionsBySurvey')-> name('sections.getSectionsBySurvey');
+        Route::get('/survey/{id_survey}', 'getSectionsBySurvey')->name('sections.getSectionsBySurvey');
 
     });
     
@@ -155,6 +222,11 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/{id}', 'show')->name('surveyquestion.show');
         Route::put('/{id}', 'update')->name('surveyquestion.update');
         Route::delete('/{id}', 'destroy')->name('surveyquestion.destroy');
+    });
+    
+    // Alternative route for frontend compatibility
+    Route::prefix('survey-questions')->controller(SurveyQuestionsController::class)->group(function () {
+        Route::delete('/{id}', 'destroy')->name('survey-questions.destroy');
     });
     
     
@@ -205,6 +277,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::put('/{id}', 'update')->name('temporary-surveys.update');
         Route::delete('/{id}', 'destroy')->name('temporary-surveys.destroy');
         Route::post('/auto-save', 'autoSave')->name('temporary-surveys.auto-save');
+        Route::post('/{id}/publish', 'publish')->name('temporary-surveys.publish');
     });
     
     Route::prefix('Conditions')->controller(ConditionsController::class)->group(function () {
@@ -214,6 +287,53 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/{id}', 'show')->name('Conditions.show');
         Route::put('/{id}', 'update')->name('Conditions.update');
         Route::delete('/{id}', 'destroy')->name('Conditions.destroy');
+    });
+
+    Route::prefix('groups')->controller(GroupController::class)->group(function () {
+        Route::get('/', 'index')->name('groups.index');
+        Route::post('/store', 'store')->name('groups.store');
+        Route::get('/{id}', 'show')->name('groups.show');
+        Route::delete('/{id}', 'destroy')->name('groups.destroy');
+        Route::get('/{id}/users', 'getGroupUsers')->name('groups.getGroupUsers');
+        Route::post('/add-user', 'addUser')->name('groups.addUser');
+        Route::post('/add-users', 'addUsers')->name('groups.addUsers');
+        Route::put('/{groupId}/users/{userId}', 'updateUser')->name('groups.updateUser');
+        Route::delete('/{groupId}/users/{userId}', 'deleteUser')->name('groups.deleteUser');
+    });
+
+    // Rutas de administración y limpieza
+    Route::prefix('admin/cleanup')->controller(AdminCleanupController::class)->group(function () {
+        Route::get('/stats', 'getStats')->name('admin.cleanup.stats');
+        Route::post('/surveys', 'cleanupSurveys')->name('admin.cleanup.surveys');
+        Route::post('/categories', 'cleanupOrphanCategories')->name('admin.cleanup.categories');
+        Route::post('/temporaries', 'cleanupTemporarySurveys')->name('admin.cleanup.temporaries');
+        Route::post('/specific-surveys', 'deleteSpecificSurveys')->name('admin.cleanup.specific-surveys');
+        Route::post('/all', 'cleanupAll')->name('admin.cleanup.all');
+    });
+
+    // Rutas para respuestas manuales de encuestas
+    Route::prefix('manual-survey-responses')->controller(ManualSurveyResponseController::class)->group(function () {
+        Route::post('/', 'store')->name('manual.survey.responses.store');
+        Route::get('/survey/{surveyId}', 'getResponsesBySurvey')->name('manual.survey.responses.by.survey');
+        Route::get('/', 'getAllResponses')->name('manual.survey.responses.all');
+    });
+
+    // Rutas alternativas para compatibilidad con frontend
+    Route::post('/survey-responses', [ManualSurveyResponseController::class, 'store'])->name('survey.responses.store');
+    Route::get('/surveys/{surveyId}/responses', [ManualSurveyResponseController::class, 'getResponsesBySurvey'])->name('surveys.responses.by.survey');
+    
+    // Rutas protegidas para gestión de encuestas por correo
+    Route::prefix('survey-email')->controller(SurveyEmailController::class)->group(function () {
+        Route::post('/generate-link', 'generateSurveyLink')->name('survey.email.generate');
+    });
+
+    // Rutas para gestión de respondientes de encuestas
+    Route::prefix('survey-respondents')->controller(SurveyRespondentController::class)->group(function () {
+        Route::get('/survey/{surveyId}', 'getBySurvey')->name('survey.respondents.by.survey');
+        Route::get('/survey/{surveyId}/stats', 'getStats')->name('survey.respondents.stats');
+        Route::post('/mark-responded', 'markAsResponded')->name('survey.respondents.mark.responded');
+        Route::put('/{id}', 'update')->name('survey.respondents.update');
+        Route::delete('/{id}', 'destroy')->name('survey.respondents.destroy');
     });
     
 });

@@ -9,10 +9,19 @@ use Illuminate\Support\Facades\Validator;
 class CategoryController extends Controller
 {
     
-    public function index()
+    public function index(Request $request)
     {
-        // Listado de categorías ordenadas de mayor a menor por el campo 'id'
-        $category = CategoryModel::orderBy('id', 'desc')->get();
+        // Obtener el usuario autenticado
+        $user = $request->user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Usuario no autenticado'], 401);
+        }
+        
+        // Listado de categorías del usuario ordenadas de mayor a menor por el campo 'id'
+        $category = CategoryModel::where('user_create', $user->name)
+                                 ->orderBy('id', 'desc')
+                                 ->get();
         return response()->json($category);
     }
 
@@ -26,6 +35,13 @@ class CategoryController extends Controller
   
     public function store(Request $request)
     {
+        // Obtener el usuario autenticado
+        $user = $request->user();
+        
+        if (!$user) {
+            return response()->json(['message' => 'Usuario no autenticado'], 401);
+        }
+        
         // Validar los datos recibidos
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
@@ -42,19 +58,21 @@ class CategoryController extends Controller
 
         // Obtener todos los datos validados
         $data = $request->all();
+        $data['user_create'] = $user->name; // Agregar el usuario creador
 
-        // Verificar si ya existe un registro con los mismos datos clave
+        // Verificar si ya existe una categoría con el mismo título para este usuario
         $existingCategory = CategoryModel::where('title', $data['title'])
-                                         ->where('descrip_cat', $data['descrip_cat'])
+                                         ->where('user_create', $user->name)
                                          ->first();
 
         if ($existingCategory) {
             // Si el registro ya existe, devolver un mensaje indicando que ya fue creado
             $response = [
-                'message' => 'La categoría ya fue creada exitosamente',
-                //'category' => $existingCategory->toArray(),
+                'message' => 'Ya existe una categoría con este nombre',
+                'error' => 'duplicate_category',
+                'category_id' => $existingCategory->id
             ];
-            return response()->json($response, 201);
+            return response()->json($response, 409); // 409 Conflict for duplicate
         }
 
         try {
@@ -64,11 +82,12 @@ class CategoryController extends Controller
             // Preparar la respuesta
             $response = [
                 'message' => 'Categoría creada exitosamente',
-                //'category' => $category->toArray(),
+                'category_id' => $category->id,
+                'category' => $category->toArray(),
             ];
 
             // Devolver la respuesta como JSON
-            return response()->json($response, 200);
+            return response()->json($response, 201);
         } catch (\Exception $e) {
             // Capturar cualquier excepción y devolver un error 500
             return response()->json(['error' => 'Error al crear la categoría', 'details' => $e->getMessage()], 500);
@@ -148,7 +167,18 @@ class CategoryController extends Controller
             
             // Verificar si la categoría existe
             if ($category) {
-                // Eliminar la categoría
+                // Verificar si hay encuestas asociadas a esta categoría
+                $surveysCount = $category->surveys()->count();
+                
+                if ($surveysCount > 0) {
+                    return response()->json([
+                        'message' => 'No se puede eliminar la categoría porque tiene ' . $surveysCount . ' encuesta(s) asociada(s).',
+                        'error' => 'foreign_key_constraint',
+                        'surveys_count' => $surveysCount
+                    ], 409); // 409 Conflict
+                }
+                
+                // Si no hay encuestas asociadas, eliminar la categoría
                 $category->delete();
                 return response()->json(['message' => 'Registro eliminado con éxito.'], 200);
             } else {

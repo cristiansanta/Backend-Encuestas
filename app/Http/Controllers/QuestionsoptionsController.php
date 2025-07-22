@@ -52,13 +52,27 @@ class QuestionsoptionsController extends Controller
         // Si "options" es un array (para opción múltiple o verdadero/falso con las dos opciones)
         if (is_array($options)) {
             foreach ($options as $option) {
-                QuestionsoptionsModel::create([
-                    'questions_id' => $questions_id,
-                    'options' => $option['option'] ?? $option, // Verificar si tiene un campo 'option' o es un simple string
-                    'selected' => $option['selected'] ?? false, // Si es verdadero/falso o selección única
-                    'creator_id' => $request->input('creator_id'),
-                    'status' => $request->input('status'),
-                ]);
+                // Manejar diferentes formatos de opciones
+                $optionText = '';
+                if (is_string($option)) {
+                    // Opción simple como string
+                    $optionText = $option;
+                } elseif (is_array($option)) {
+                    // Opción como objeto/array con propiedades
+                    $optionText = $option['option'] ?? $option['text'] ?? $option['value'] ?? $option['label'] ?? '';
+                } else {
+                    // Convertir a string como último recurso
+                    $optionText = (string) $option;
+                }
+                
+                if (!empty($optionText)) {
+                    QuestionsoptionsModel::create([
+                        'questions_id' => $questions_id,
+                        'options' => $optionText,
+                        'creator_id' => $request->input('creator_id'),
+                        'status' => $request->input('status'),
+                    ]);
+                }
             }
         } else {
             // Para respuesta abierta o único string

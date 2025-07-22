@@ -4,6 +4,12 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\NotificationSurvaysModel;
+use App\Models\SurveyModel;
+use App\Models\SurveyRespondentModel;
+use App\Models\GroupModel;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Str;
+use Carbon\Carbon;
 
 class NotificationSurvaysController extends Controller
 {
@@ -13,7 +19,7 @@ class NotificationSurvaysController extends Controller
         // Validar los parámetros opcionales id_survey y email
         $validatedData = $request->validate([
             'id_survey' => 'integer|nullable',
-            'email' => 'email|nullable',
+            'email' => 'nullable', // Permitir tanto string como array
         ]);
     
         // Construir la consulta en base a los parámetros proporcionados
@@ -24,13 +30,31 @@ class NotificationSurvaysController extends Controller
         }
     
         if ($request->has('email')) {
-            $query->where('email', $validatedData['email']);
+            $email = $validatedData['email'];
+            if (is_array($email)) {
+                // Buscar registros que contengan cualquiera de los correos en el array
+                $query->where(function($q) use ($email) {
+                    foreach ($email as $singleEmail) {
+                        $q->orWhereJsonContains('email', $singleEmail);
+                    }
+                });
+            } else {
+                // Búsqueda tradicional para un solo correo
+                $query->where(function($q) use ($email) {
+                    $q->where('email', $email)
+                      ->orWhereJsonContains('email', $email);
+                });
+            }
         }
     
         // Ejecutar la consulta
         $notificationSurvey = $query->get();
     
-        return response()->json($notificationSurvey);
+        return response()->json([
+            'success' => true,
+            'data' => $notificationSurvey,
+            'count' => $notificationSurvey->count()
+        ]);
     }
     
 
@@ -43,15 +67,73 @@ class NotificationSurvaysController extends Controller
             'state_results' => 'nullable|boolean',
             'date_insert' => 'nullable|date',
             'id_survey' => 'nullable|integer',
-            'email' => 'nullable|string|max:255',
+            'email' => 'nullable', // Permitir tanto string como array
             'expired_date' => 'nullable|date'
         ]);
+
+        // Si email es un array, validar cada correo individualmente
+        if (is_array($validatedData['email'])) {
+            foreach ($validatedData['email'] as $email) {
+                if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    return response()->json(['error' => "Correo inválido: {$email}"], 422);
+                }
+            }
+        } elseif ($validatedData['email'] && !filter_var($validatedData['email'], FILTER_VALIDATE_EMAIL)) {
+            return response()->json(['error' => "Correo inválido: {$validatedData['email']}"], 422);
+        }
 
         // Crear un nuevo registro en la base de datos
         $record = NotificationSurvaysModel::create($validatedData);
 
+        // NUEVA FUNCIONALIDAD: Crear registros de respondientes en estado "Enviada"
+        if ($validatedData['id_survey'] && $validatedData['email']) {
+            $emails = is_array($validatedData['email']) ? $validatedData['email'] : [$validatedData['email']];
+            
+            // Extraer información del grupo si está disponible en los datos
+            $data = is_string($validatedData['data']) ? json_decode($validatedData['data'], true) : $validatedData['data'];
+            $groupName = $data['grupo'] ?? null;
+            $groupId = null;
+            
+            // Intentar encontrar el grupo por nombre
+            if ($groupName) {
+                $group = GroupModel::where('name', $groupName)->first();
+                $groupId = $group ? $group->id : null;
+            }
+            
+            foreach ($emails as $email) {
+                // Verificar si ya existe un registro para esta combinación
+                $existingRespondent = SurveyRespondentModel::where('survey_id', $validatedData['id_survey'])
+                    ->where('respondent_email', $email)
+                    ->first();
+                    
+                if (!$existingRespondent) {
+                    // Crear token único para el correo
+                    $emailToken = Str::random(64);
+                    
+                    SurveyRespondentModel::create([
+                        'survey_id' => $validatedData['id_survey'],
+                        'respondent_name' => $this->extractNameFromEmail($email),
+                        'respondent_email' => $email,
+                        'status' => 'Enviada',
+                        'sent_at' => now(),
+                        'notification_id' => $record->id,
+                        'group_id' => $groupId,
+                        'group_name' => $groupName,
+                        'email_token' => $emailToken
+                    ]);
+                }
+            }
+        }
+
         // Retornar la respuesta en JSON
-        return response()->json($record, 201);
+        return response()->json([
+            'success' => true,
+            'message' => is_array($validatedData['email']) 
+                ? 'Notificación grupal creada exitosamente con ' . count($validatedData['email']) . ' correos'
+                : 'Notificación individual creada exitosamente',
+            'data' => $record,
+            'email_count' => is_array($validatedData['email']) ? count($validatedData['email']) : 1
+        ], 201);
     }
 
     public function update(Request $request)
@@ -98,6 +180,240 @@ class NotificationSurvaysController extends Controller
             'Pragma' => 'no-cache',
             'Expires' => '0'
         ]);
+    }
+
+    public function downloadRespondentsTemplate()
+    {
+        try {
+            // Crear contenido CSV con las columnas requeridas
+            $csvContent = "TipoDocumento,NumeroDocumento,Nombre,Correo,Regional,CentroFormacion,ProgramaFormacion,FichaGrupo,TipoCaracterizacion\n";
+            $csvContent .= "CC,12345678,Juan Pérez,juan.perez@ejemplo.com,Antioquia,Centro Industrial,Tecnología en Sistemas,123456,Egresados\n";
+            $csvContent .= "TI,87654321,María López,maria.lopez@ejemplo.com,Cundinamarca,Centro de Servicios,Administración,654321,Servidores\n";
+            
+            // Crear archivo temporal
+            $tempPath = tempnam(sys_get_temp_dir(), 'plantilla_encuestados_');
+            file_put_contents($tempPath, $csvContent);
+            
+            // Crear respuesta de descarga
+            $response = response()->download($tempPath, 'Plantilla_Encuestados.csv', [
+                'Content-Type' => 'text/csv',
+                'Cache-Control' => 'no-cache, no-store, must-revalidate',
+                'Pragma' => 'no-cache',
+                'Expires' => '0'
+            ]);
+            
+            // Eliminar archivo temporal después de la descarga
+            register_shutdown_function(function() use ($tempPath) {
+                if (file_exists($tempPath)) {
+                    unlink($tempPath);
+                }
+            });
+            
+            return $response;
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Error al generar la plantilla',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Genera enlaces de encuesta con tokens JWT para envío masivo por correo
+     */
+    public function generateSurveyEmailLinks(Request $request)
+    {
+        try {
+            // Validar los datos entrantes
+            $validatedData = $request->validate([
+                'survey_id' => 'required|integer|exists:surveys,id',
+                'emails' => 'required|array|min:1',
+                'emails.*.email' => 'required|email',
+                'emails.*.name' => 'nullable|string|max:255'
+            ]);
+
+            $surveyId = $validatedData['survey_id'];
+            $emails = $validatedData['emails'];
+
+            // Verificar que la encuesta existe y está activa
+            $survey = SurveyModel::findOrFail($surveyId);
+            
+            if (!$survey->status) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La encuesta no está activa'
+                ], 400);
+            }
+
+            $generatedLinks = [];
+            $errors = [];
+
+            foreach ($emails as $emailData) {
+                try {
+                    // Crear un token único para esta combinación de encuesta y email
+                    $tokenData = [
+                        'survey_id' => $surveyId,
+                        'email' => $emailData['email'],
+                        'respondent_name' => $emailData['name'] ?? null,
+                        'issued_at' => Carbon::now()->timestamp,
+                        'expires_at' => $survey->end_date ? $survey->end_date->timestamp : Carbon::now()->addDays(30)->timestamp,
+                        'unique_id' => Str::uuid()
+                    ];
+
+                    // Cifrar el token con Laravel Crypt
+                    $encryptedToken = Crypt::encrypt($tokenData);
+
+                    // Crear o actualizar el registro de notificación
+                    $notification = NotificationSurvaysModel::updateOrCreate(
+                        [
+                            'id_survey' => $surveyId,
+                            'email' => json_encode([$emailData['email']])
+                        ],
+                        [
+                            'data' => json_encode([
+                                'survey_id' => $surveyId,
+                                'respondent_name' => $emailData['name'],
+                                'type' => 'mass_email_survey_access',
+                                'token_issued_at' => Carbon::now(),
+                                'unique_token' => $tokenData['unique_id']
+                            ]),
+                            'state' => 'pending_response',
+                            'state_results' => false,
+                            'date_insert' => Carbon::now(),
+                            'expired_date' => $survey->end_date ?? Carbon::now()->addDays(30),
+                            'respondent_name' => $emailData['name']
+                        ]
+                    );
+
+                    // Generar la URL de la encuesta
+                    $surveyUrl = config('app.frontend_url', 'http://localhost:3000') . 
+                                '/survey-view-manual/' . $surveyId . 
+                                '?token=' . urlencode($encryptedToken);
+
+                    $generatedLinks[] = [
+                        'email' => $emailData['email'],
+                        'name' => $emailData['name'],
+                        'survey_url' => $surveyUrl,
+                        'encrypted_token' => $encryptedToken,
+                        'notification_id' => $notification->id,
+                        'expires_at' => $survey->end_date ?? Carbon::now()->addDays(30)
+                    ];
+
+                } catch (\Exception $e) {
+                    $errors[] = [
+                        'email' => $emailData['email'],
+                        'error' => $e->getMessage()
+                    ];
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Enlaces de encuesta generados exitosamente',
+                'data' => [
+                    'survey_id' => $surveyId,
+                    'survey_title' => $survey->title,
+                    'generated_links' => $generatedLinks,
+                    'total_generated' => count($generatedLinks),
+                    'errors' => $errors,
+                    'total_errors' => count($errors)
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al generar enlaces de encuesta',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Obtiene el estado de las notificaciones de una encuesta específica
+     */
+    public function getSurveyNotificationStatus(Request $request)
+    {
+        try {
+            $validatedData = $request->validate([
+                'survey_id' => 'required|integer|exists:surveys,id'
+            ]);
+
+            $surveyId = $validatedData['survey_id'];
+
+            // Obtener todas las notificaciones de la encuesta
+            $notifications = NotificationSurvaysModel::where('id_survey', $surveyId)
+                ->with('survey')
+                ->get();
+
+            $statusSummary = [
+                'total_notifications' => $notifications->count(),
+                'pending_responses' => 0,
+                'completed_responses' => 0,
+                'expired_links' => 0,
+                'notifications' => []
+            ];
+
+            foreach ($notifications as $notification) {
+                $isExpired = $notification->expired_date && Carbon::now()->isAfter($notification->expired_date);
+                $hasResponded = $notification->state_results && !empty($notification->response_data);
+                
+                if ($isExpired) {
+                    $statusSummary['expired_links']++;
+                } elseif ($hasResponded) {
+                    $statusSummary['completed_responses']++;
+                } else {
+                    $statusSummary['pending_responses']++;
+                }
+
+                $statusSummary['notifications'][] = [
+                    'id' => $notification->id,
+                    'emails' => $notification->email,
+                    'respondent_name' => $notification->respondent_name,
+                    'has_responded' => $hasResponded,
+                    'is_expired' => $isExpired,
+                    'response_date' => $hasResponded ? $notification->date_insert : null,
+                    'expired_date' => $notification->expired_date,
+                    'state' => $notification->state
+                ];
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $statusSummary
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener estado de notificaciones',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Extrae un nombre aproximado del correo electrónico
+     */
+    private function extractNameFromEmail($email)
+    {
+        // Extraer la parte antes del @
+        $namePart = explode('@', $email)[0];
+        
+        // Reemplazar puntos, guiones y números con espacios
+        $namePart = preg_replace('/[._-]/', ' ', $namePart);
+        $namePart = preg_replace('/\d+/', '', $namePart);
+        
+        // Capitalizar cada palabra
+        $name = ucwords(trim($namePart));
+        
+        // Si queda muy corto o vacío, usar el correo completo
+        if (strlen($name) < 2) {
+            return $email;
+        }
+        
+        return $name;
     }
     
 }
