@@ -31,7 +31,7 @@ use App\Http\Controllers\ContactInfoController;
 Route::get('/storage/images/{filename}', [FileController::class, 'show']);
 
 
-Route::post('/login', [AuthController::class, 'login']);
+Route::post('/login', [AuthController::class, 'login'])->name('login');
 
 Route::post('newusers/store', [UserController::class, 'store']);
 
