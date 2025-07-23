@@ -19,7 +19,12 @@ class Cors
 
         $response->headers->set('Access-Control-Allow-Origin', '*');
         $response->headers->set('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, PUT, DELETE, PATCH');
-        $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, X-Auth-Token, Origin, Authorization');
+        $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, X-Auth-Token, Origin, Authorization, Accept');
+        
+        // Handle preflight requests
+        if ($request->getMethod() === 'OPTIONS') {
+            return response('', 200);
+        }
 
         return $response;
     }
