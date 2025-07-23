@@ -45,10 +45,7 @@ class AuthController extends Controller
                 return response()->json([
                     'message' => 'Error de validación',
                     'errors' => $validator->errors(),
-                ], 422)
-                ->header('Access-Control-Allow-Origin', '*')
-                ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS')
-                ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+                ], 422);
             }
             
             $credentials = $validator->validated();
@@ -61,10 +58,7 @@ class AuthController extends Controller
                 if (!$user->active) {
                     return response()->json([
                         'message' => 'Usuario inactivo. Contacte al administrador.'
-                    ], 403)
-                    ->header('Access-Control-Allow-Origin', '*')
-                    ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS')
-                    ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+                    ], 403);
                 }
                 
                 $token = $user->createToken('auth_token')->plainTextToken;
@@ -93,34 +87,22 @@ class AuthController extends Controller
                         }),
                         'permissions' => $allPermissions->pluck('name')->toArray()
                     ],
-                ], 200)
-                ->header('Access-Control-Allow-Origin', '*')
-                ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS')
-                ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+                ], 200);
             }
     
             // Credenciales incorrectas
-            return response()->json(['message' => 'Credenciales incorrectas'], 401)
-                ->header('Access-Control-Allow-Origin', '*')
-                ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS')
-                ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+            return response()->json(['message' => 'Credenciales incorrectas'], 401);
                 
         } catch (ValidationException $e) {
             return response()->json([
                 'message' => 'Error de validación',
                 'errors' => $e->errors(),
-            ], 422)
-            ->header('Access-Control-Allow-Origin', '*')
-            ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS')
-            ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+            ], 422);
         } catch (\Exception $e) {
             return response()->json([
                 'message' => 'Error inesperado en el servidor',
                 'error' => $e->getMessage(),
-            ], 500)
-            ->header('Access-Control-Allow-Origin', '*')
-            ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS')
-            ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+            ], 500);
         }
     }
     
