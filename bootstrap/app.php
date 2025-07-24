@@ -24,11 +24,12 @@ return Application::configure(basePath: dirname(__DIR__))
             'ability' => CheckForAnyAbility::class,
                  
         ]);
-        $middleware->group('api', [
-            // \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class, // Removido para SPA con tokens Bearer
-            \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
-            \Illuminate\Routing\Middleware\SubstituteBindings::class,
-        ]);
+        // $middleware->group('api', [
+        //     \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+        //     'auth.api',
+        //     \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
+        //     \Illuminate\Routing\Middleware\SubstituteBindings::class,
+        // ]);
 
 
     })
