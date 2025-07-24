@@ -72,7 +72,10 @@ Route::prefix('manual-survey')->controller(ManualSurveyResponseController::class
 });
 
 
-Route::middleware(['auth:sanctum'])->group(function () {
+// Temporary test without auth
+Route::get('/surveys/', [SurveyController::class, 'index'])->name('surveys.index.test');
+
+Route::middleware(['debug.auth', 'auth:sanctum'])->group(function () {
     
     Route::prefix('users')->group(function () {
         Route::get('/', [UserController::class, 'index'])->name('users.index');
