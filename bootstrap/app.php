@@ -20,16 +20,17 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->append(Cors::class);
         $middleware->alias([
             'auth.api' => \App\Http\Middleware\EnsureApiAuthentication::class,
+            'debug.auth' => \App\Http\Middleware\DebugAuth::class,
             'abilities' => CheckAbilities::class,
             'ability' => CheckForAnyAbility::class,
                  
         ]);
-        // $middleware->group('api', [
-        //     \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
-        //     'auth.api',
-        //     \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
-        //     \Illuminate\Routing\Middleware\SubstituteBindings::class,
-        // ]);
+        $middleware->group('api', [
+            // \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+            'auth.api',
+            \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
+            \Illuminate\Routing\Middleware\SubstituteBindings::class,
+        ]);
 
 
     })
