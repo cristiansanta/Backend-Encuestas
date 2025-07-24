@@ -72,8 +72,8 @@ Route::prefix('manual-survey')->controller(ManualSurveyResponseController::class
 });
 
 
-// Temporary test without auth
-Route::get('/surveys/', [SurveyController::class, 'index'])->name('surveys.index.test');
+// Temporary test without auth - DISABLED for security
+// Route::get('/surveys/', [SurveyController::class, 'index'])->name('surveys.index.test');
 
 Route::middleware(['debug.auth', 'auth:sanctum'])->group(function () {
     
