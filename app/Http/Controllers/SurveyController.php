@@ -25,8 +25,8 @@ class SurveyController extends Controller
      */
     public function index(Request $request)
     {
-        // Obtener el usuario autenticado
-        $user = $request->user();
+        // Obtener el usuario autenticado usando el guard sanctum explícitamente
+        $user = $request->user('sanctum');
         
         if (!$user) {
             return response()->json(['message' => 'Usuario no autenticado'], 401);
