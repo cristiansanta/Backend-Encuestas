@@ -29,7 +29,7 @@ class Kernel extends HttpKernel
 
         'api' => [
             // \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class, // Removido para SPA con tokens Bearer
-            'throttle:api',
+            // 'throttle:api', // Comentado temporalmente hasta que se configure el rate limiter
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ],
     ];
