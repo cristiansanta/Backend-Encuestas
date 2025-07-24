@@ -28,8 +28,9 @@ class Kernel extends HttpKernel
         ],
 
         'api' => [
+            \App\Http\Middleware\ForceApiGuard::class,
             // \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class, // Removido para SPA con tokens Bearer
-            // 'throttle:api', // Comentado temporalmente hasta que se configure el rate limiter
+            'throttle:api',
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ],
     ];
