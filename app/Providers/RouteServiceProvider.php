@@ -29,7 +29,11 @@ class RouteServiceProvider extends ServiceProvider
         });
 
         $this->routes(function () {
-            Route::middleware('api')
+            Route::middleware([
+                // Middleware API sin EnsureFrontendRequestsAreStateful para tokens Bearer
+                'throttle:api',
+                \Illuminate\Routing\Middleware\SubstituteBindings::class,
+            ])
                 ->prefix('api')
                 ->group(base_path('routes/api.php'));
 
