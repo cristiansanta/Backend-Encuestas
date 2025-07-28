@@ -158,14 +158,14 @@ class QuestionIntegrityService
             $warnings[] = 'Estado obligatorio no pudo ser determinado correctamente';
         }
 
-        // Validar opciones para tipos que las requieren
+        // Validar opciones para tipos que las requieren (más flexible para borradores)
         if (in_array($question->type_questions_id, [3, 4])) { // Opción única y múltiple
             $optionsCount = DB::table('questionsoptions')
                 ->where('questions_id', $question->id)
                 ->count();
             
             if ($optionsCount === 0) {
-                $errors[] = 'Las preguntas de opción única/múltiple deben tener opciones definidas';
+                $warnings[] = 'Las preguntas de opción única/múltiple deberían tener opciones definidas';
             }
         }
 

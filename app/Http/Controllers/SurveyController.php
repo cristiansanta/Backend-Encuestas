@@ -252,6 +252,14 @@ class SurveyController extends Controller
             }
         }
         
+        // Para borradores, solo registrar advertencias pero permitir guardado
+        if ($request->has('status') && $request->status === false) {
+            $integrityCheck = $this->validateSurveyQuestionsIntegrity($survey);
+            if (!empty($integrityCheck['warnings'])) {
+                \Log::warning("SurveyController::update - Advertencias en borrador ID: {$id}", $integrityCheck['warnings']);
+            }
+        }
+        
         // Si se está actualizando el título, validar que no exista otra encuesta con el mismo título para el mismo usuario
         if ($request->has('title') && $request->title !== $survey->title) {
             $existingSurvey = SurveyModel::where('title', $request->title)
