@@ -1,0 +1,17 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: encuestados_app
+    ports:
+      - 8080:80
+    volumes:
+        - .:/var/www/html
+    environment:
+      - APACHE_DOCUMENT_ROOT=/var/www/html/public
+    networks:
+      - encuestados-network
+          
+networks:
+  encuestados-network:
