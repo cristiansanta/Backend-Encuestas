@@ -22,16 +22,19 @@ class Cors
             'headers' => $request->headers->all()
         ]);
         
-        $response = $next($request);
-
-        $response->headers->set('Access-Control-Allow-Origin', '*');
-        $response->headers->set('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, PUT, DELETE, PATCH');
-        $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, X-Auth-Token, Origin, Authorization, Accept');
-        
-        // Handle preflight requests
+        // Handle preflight requests first
         if ($request->getMethod() === 'OPTIONS') {
-            return response('', 200);
+            $response = response('', 200);
+        } else {
+            $response = $next($request);
         }
+
+        // Set CORS headers
+        $response->headers->set('Access-Control-Allow-Origin', 'http://localhost:5173');
+        $response->headers->set('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, PUT, DELETE, PATCH');
+        $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, X-Auth-Token, Origin, Authorization, Accept, X-Requested-With');
+        $response->headers->set('Access-Control-Allow-Credentials', 'true');
+        $response->headers->set('Access-Control-Max-Age', '86400');
 
         return $response;
     }

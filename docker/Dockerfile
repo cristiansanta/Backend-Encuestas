@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     libcurl4-openssl-dev \ 
     unzip \
     libxml2-dev \
+    postgresql-client \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Habilitar módulos de Apache
@@ -26,6 +27,9 @@ RUN sed -ri -e 's!/var/www/!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/apache2.conf
 
 # Instalar extensiones PHP
 RUN docker-php-ext-install pdo_pgsql pgsql zip curl xml mbstring
+
+# Instalar Redis extension
+RUN pecl install redis && docker-php-ext-enable redis
 
 # Copiar configuración PHP
 COPY ./docker/php/php.ini /usr/local/etc/php/conf.d/custom.ini
@@ -54,11 +58,11 @@ RUN php artisan cache:clear || true
 RUN php artisan route:clear || true
 RUN php artisan view:clear || true
 
-# Cambiar a usuario www-data
-USER www-data
+# Configurar Apache para puerto 8000
+RUN sed -i 's/Listen 80/Listen 8000/' /etc/apache2/ports.conf
 
-# Exponer puerto 80
-EXPOSE 80
+# Exponer puerto 8000
+EXPOSE 8000
 
-# Iniciar Apache
+# Iniciar Apache como root (necesario para bind al puerto)
 CMD ["/usr/sbin/apachectl", "-D", "FOREGROUND"]
