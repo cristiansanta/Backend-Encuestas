@@ -38,6 +38,19 @@ class SurveyController extends Controller
         // Filtrar encuestas por el usuario autenticado
         $surveys = SurveyModel::where('user_create', $user->name)->get();
         
+        // Agregar contador de respuestas a cada encuesta
+        $surveys->map(function ($survey) {
+            // Contar respuestas desde la tabla notificationsurvays donde se almacenan las respuestas reales
+            $count = \DB::table('notificationsurvays')
+                ->where('id_survey', $survey->id)
+                ->where('state_results', '1') // Solo contar respuestas completadas (varchar '1')
+                ->whereNotNull('respondent_name') // Asegurar que hay un encuestado válido
+                ->count();
+            
+            $survey->responses_count = $count;
+            return $survey;
+        });
+        
         return response()->json($surveys); // Cambiado para devolver JSON
         //return view('surveys.index', compact('surveys'));
     }
@@ -1043,7 +1056,7 @@ private function updateSurveyStatusBasedOnDates($survey)
             // Contar respuestas desde la tabla notificationsurvays donde se almacenan las respuestas reales
             $count = \DB::table('notificationsurvays')
                 ->where('id_survey', $id)
-                ->where('state_results', true) // Solo contar respuestas completadas
+                ->where('state_results', '1') // Solo contar respuestas completadas (varchar '1')
                 ->whereNotNull('respondent_name') // Asegurar que hay un encuestado válido
                 ->count();
 
