@@ -169,6 +169,11 @@ class SurveyController extends Controller
             }
         }
 
+        // Asegurar que publication_status tenga un valor por defecto si no se proporciona
+        if (empty($data['publication_status'])) {
+            $data['publication_status'] = $data['status'] ? 'published' : 'unpublished';
+        }
+
         try {
             // Crear la encuesta en la base de datos
             $survey = SurveyModel::create($data);
@@ -1250,7 +1255,8 @@ private function updateSurveyStatesAutomatic()
                 $needsUpdate = true;
             }
             elseif (!$shouldBeFinished && !$shouldBeScheduled && 
-                    !in_array($survey->publication_status, ['published', 'finished'])) {
+                    $survey->publication_status !== 'published') {
+                // Si no está finalizada ni programada (está activa), debe estar como 'published'
                 $newStatus = 'published';
                 $needsUpdate = true;
             }
