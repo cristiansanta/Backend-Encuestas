@@ -552,30 +552,71 @@ class SurveyController extends Controller
         }
 
         // FIXED: Obtener secciones usando el método correcto que incluye secciones del banco
-        $sectionsController = new SectionController();
-        $sectionsResponse = $sectionsController->getSectionsBySurvey($id);
-        $sectionsData = $sectionsResponse->getData();
-        
-        // Convertir a Collection para mantener compatibilidad
-        $allSections = collect($sectionsData);
+        try {
+            $sectionsController = new SectionController();
+            $sectionsResponse = $sectionsController->getSectionsBySurvey($id);
+            
+            // FIX: Manejar la respuesta de manera más robusta
+            if ($sectionsResponse->getStatusCode() === 200) {
+                $sectionsData = json_decode($sectionsResponse->getContent(), true);
+                if ($sectionsData && is_array($sectionsData)) {
+                    $allSections = collect($sectionsData);
+                } else {
+                    $allSections = collect([]);
+                }
+            } else {
+                $allSections = collect([]);
+            }
+        } catch (\Exception $e) {
+            \Log::warning("Failed to get sections for survey {$id}: " . $e->getMessage());
+            $allSections = collect([]);
+        }
         
         // Asignar las secciones al survey
         $survey->setRelation('sections', $allSections);
 
         // Log información de debug con detalles de secciones y preguntas
         $sectionDetails = $survey->sections->map(function($section) {
-            return "ID: {$section->id}, Title: '{$section->title}', id_survey: {$section->id_survey}";
+            // Handle both array and object formats
+            if (is_array($section)) {
+                $id = $section['id'] ?? 'unknown';
+                $title = $section['title'] ?? 'unknown';
+                $id_survey = $section['id_survey'] ?? 'null';
+            } else {
+                $id = $section->id ?? 'unknown';
+                $title = $section->title ?? 'unknown';
+                $id_survey = $section->id_survey ?? 'null';
+            }
+            return "ID: {$id}, Title: '{$title}', id_survey: {$id_survey}";
         })->toArray();
         
         // AGREGADO: Log detallado de preguntas y sus relaciones
         $questionDetails = $survey->surveyQuestions->map(function($sq) {
             $question = $sq->question;
-            $optionsCount = $question->options ? $question->options->count() : 0;
-            $childrenCount = $question->childQuestions ? $question->childQuestions->count() : 0;
-            $hasParent = $question->cod_padre ? 'SI' : 'NO';
-            $hasConditions = $question->questions_conditions ? 'SI' : 'NO';
             
-            return "Q{$question->id}: '{$question->title}' | Type: {$question->type_questions_id} | Options: {$optionsCount} | Children: {$childrenCount} | HasParent: {$hasParent} | HasConditions: {$hasConditions} | MotherAnswer: " . ($question->mother_answer_condition ?: 'NONE');
+            // Handle both array and object formats for questions
+            if (is_array($question)) {
+                $id = $question['id'] ?? 'unknown';
+                $title = $question['title'] ?? 'unknown';
+                $type_id = $question['type_questions_id'] ?? 'unknown';
+                $cod_padre = $question['cod_padre'] ?? null;
+                $mother_answer = $question['mother_answer_condition'] ?? null;
+                $optionsCount = 0; // Can't easily count array options
+                $childrenCount = 0; // Can't easily count array children
+            } else {
+                $id = $question->id ?? 'unknown';
+                $title = $question->title ?? 'unknown';
+                $type_id = $question->type_questions_id ?? 'unknown';
+                $cod_padre = $question->cod_padre ?? null;
+                $mother_answer = $question->mother_answer_condition ?? null;
+                $optionsCount = $question->options ? $question->options->count() : 0;
+                $childrenCount = $question->childQuestions ? $question->childQuestions->count() : 0;
+            }
+            
+            $hasParent = $cod_padre ? 'SI' : 'NO';
+            $hasConditions = 'NO'; // Simplified for array compatibility
+            
+            return "Q{$id}: '{$title}' | Type: {$type_id} | Options: {$optionsCount} | Children: {$childrenCount} | HasParent: {$hasParent} | HasConditions: {$hasConditions} | MotherAnswer: " . ($mother_answer ?: 'NONE');
         })->toArray();
         
         \Log::info("getSurveyDetails for survey {$id} - Sections: {$survey->sections->count()}, Questions: {$survey->surveyQuestions->count()}");
@@ -584,7 +625,9 @@ class SurveyController extends Controller
 
         // Deduplicar secciones si hay duplicados por título
         $uniqueSections = $survey->sections->unique(function ($section) {
-            return strtolower(trim($section->title));
+            // Handle both array and object formats
+            $title = is_array($section) ? ($section['title'] ?? '') : ($section->title ?? '');
+            return strtolower(trim($title));
         })->values();
         
         if ($uniqueSections->count() !== $survey->sections->count()) {
