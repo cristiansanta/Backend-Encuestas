@@ -1315,7 +1315,7 @@ private function validateSurveyQuestionsIntegrity($survey)
             
             // Validar que las preguntas de opción múltiple/única tengan opciones
             if (in_array($question->type_questions_id, [3, 4])) { // Opción única y múltiple
-                $optionsCount = DB::table('questionsoptions')
+                $optionsCount = DB::table('question_options')
                     ->where('questions_id', $question->id)
                     ->count();
                 

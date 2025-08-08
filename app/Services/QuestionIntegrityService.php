@@ -160,7 +160,7 @@ class QuestionIntegrityService
 
         // Validar opciones para tipos que las requieren (más flexible para borradores)
         if (in_array($question->type_questions_id, [3, 4])) { // Opción única y múltiple
-            $optionsCount = DB::table('questionsoptions')
+            $optionsCount = DB::table('question_options')
                 ->where('questions_id', $question->id)
                 ->count();
             

@@ -157,6 +157,57 @@ class QuestionsoptionsController extends Controller
     }
 
     /**
+     * Update all options for a specific question.
+     */
+    public function updateByQuestion(Request $request, string $question_id)
+    {
+        $validator = Validator::make($request->all(), [
+            'options' => 'required|array',
+            'creator_id' => 'required|integer',
+            'status' => 'required|boolean',
+        ]);
+    
+        if ($validator->fails()) {
+            return response()->json([
+                'error' => 'Error de validación',
+                'details' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            // Eliminar todas las opciones existentes para esta pregunta
+            QuestionsoptionsModel::where('questions_id', $question_id)->delete();
+
+            // Crear las nuevas opciones
+            $options = $request->input('options');
+            foreach ($options as $option) {
+                // Manejar diferentes formatos de opciones
+                $optionText = '';
+                if (is_string($option)) {
+                    $optionText = $option;
+                } elseif (is_array($option)) {
+                    $optionText = $option['option'] ?? $option['text'] ?? $option['value'] ?? $option['label'] ?? '';
+                } else {
+                    $optionText = (string) $option;
+                }
+                
+                if (!empty($optionText)) {
+                    QuestionsoptionsModel::create([
+                        'questions_id' => $question_id,
+                        'options' => $optionText,
+                        'creator_id' => $request->input('creator_id'),
+                        'status' => $request->input('status'),
+                    ]);
+                }
+            }
+
+            return response()->json(['message' => 'Opciones actualizadas exitosamente'], 200);
+        } catch (\Exception $e) {
+            return response()->json(['message' => 'Error al actualizar opciones: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /**
      * Remove the specified resource from storage.
      */
     public function destroy(string $id)
