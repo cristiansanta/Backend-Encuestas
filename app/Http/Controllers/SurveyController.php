@@ -38,6 +38,19 @@ class SurveyController extends Controller
         // Filtrar encuestas por el usuario autenticado
         $surveys = SurveyModel::where('user_create', $user->name)->get();
         
+        // Agregar contador de respuestas a cada encuesta
+        $surveys->map(function ($survey) {
+            // Contar respuestas desde la tabla notificationsurvays donde se almacenan las respuestas reales
+            $count = \DB::table('notificationsurvays')
+                ->where('id_survey', $survey->id)
+                ->where('state_results', '1') // Solo contar respuestas completadas (varchar '1')
+                ->whereNotNull('respondent_name') // Asegurar que hay un encuestado válido
+                ->count();
+            
+            $survey->responses_count = $count;
+            return $survey;
+        });
+        
         return response()->json($surveys); // Cambiado para devolver JSON
         //return view('surveys.index', compact('surveys'));
     }
@@ -156,6 +169,11 @@ class SurveyController extends Controller
             }
         }
 
+        // Asegurar que publication_status tenga un valor por defecto si no se proporciona
+        if (empty($data['publication_status'])) {
+            $data['publication_status'] = $data['status'] ? 'published' : 'unpublished';
+        }
+
         try {
             // Crear la encuesta en la base de datos
             $survey = SurveyModel::create($data);
@@ -249,6 +267,14 @@ class SurveyController extends Controller
                     'message' => 'No se puede publicar la encuesta debido a problemas de integridad en las preguntas',
                     'errors' => $integrityCheck['errors']
                 ], 422);
+            }
+        }
+        
+        // Para borradores, solo registrar advertencias pero permitir guardado
+        if ($request->has('status') && $request->status === false) {
+            $integrityCheck = $this->validateSurveyQuestionsIntegrity($survey);
+            if (!empty($integrityCheck['warnings'])) {
+                \Log::warning("SurveyController::update - Advertencias en borrador ID: {$id}", $integrityCheck['warnings']);
             }
         }
         
@@ -526,30 +552,71 @@ class SurveyController extends Controller
         }
 
         // FIXED: Obtener secciones usando el método correcto que incluye secciones del banco
-        $sectionsController = new SectionController();
-        $sectionsResponse = $sectionsController->getSectionsBySurvey($id);
-        $sectionsData = $sectionsResponse->getData();
-        
-        // Convertir a Collection para mantener compatibilidad
-        $allSections = collect($sectionsData);
+        try {
+            $sectionsController = new SectionController();
+            $sectionsResponse = $sectionsController->getSectionsBySurvey($id);
+            
+            // FIX: Manejar la respuesta de manera más robusta
+            if ($sectionsResponse->getStatusCode() === 200) {
+                $sectionsData = json_decode($sectionsResponse->getContent(), true);
+                if ($sectionsData && is_array($sectionsData)) {
+                    $allSections = collect($sectionsData);
+                } else {
+                    $allSections = collect([]);
+                }
+            } else {
+                $allSections = collect([]);
+            }
+        } catch (\Exception $e) {
+            \Log::warning("Failed to get sections for survey {$id}: " . $e->getMessage());
+            $allSections = collect([]);
+        }
         
         // Asignar las secciones al survey
         $survey->setRelation('sections', $allSections);
 
         // Log información de debug con detalles de secciones y preguntas
         $sectionDetails = $survey->sections->map(function($section) {
-            return "ID: {$section->id}, Title: '{$section->title}', id_survey: {$section->id_survey}";
+            // Handle both array and object formats
+            if (is_array($section)) {
+                $id = $section['id'] ?? 'unknown';
+                $title = $section['title'] ?? 'unknown';
+                $id_survey = $section['id_survey'] ?? 'null';
+            } else {
+                $id = $section->id ?? 'unknown';
+                $title = $section->title ?? 'unknown';
+                $id_survey = $section->id_survey ?? 'null';
+            }
+            return "ID: {$id}, Title: '{$title}', id_survey: {$id_survey}";
         })->toArray();
         
         // AGREGADO: Log detallado de preguntas y sus relaciones
         $questionDetails = $survey->surveyQuestions->map(function($sq) {
             $question = $sq->question;
-            $optionsCount = $question->options ? $question->options->count() : 0;
-            $childrenCount = $question->childQuestions ? $question->childQuestions->count() : 0;
-            $hasParent = $question->cod_padre ? 'SI' : 'NO';
-            $hasConditions = $question->questions_conditions ? 'SI' : 'NO';
             
-            return "Q{$question->id}: '{$question->title}' | Type: {$question->type_questions_id} | Options: {$optionsCount} | Children: {$childrenCount} | HasParent: {$hasParent} | HasConditions: {$hasConditions} | MotherAnswer: " . ($question->mother_answer_condition ?: 'NONE');
+            // Handle both array and object formats for questions
+            if (is_array($question)) {
+                $id = $question['id'] ?? 'unknown';
+                $title = $question['title'] ?? 'unknown';
+                $type_id = $question['type_questions_id'] ?? 'unknown';
+                $cod_padre = $question['cod_padre'] ?? null;
+                $mother_answer = $question['mother_answer_condition'] ?? null;
+                $optionsCount = 0; // Can't easily count array options
+                $childrenCount = 0; // Can't easily count array children
+            } else {
+                $id = $question->id ?? 'unknown';
+                $title = $question->title ?? 'unknown';
+                $type_id = $question->type_questions_id ?? 'unknown';
+                $cod_padre = $question->cod_padre ?? null;
+                $mother_answer = $question->mother_answer_condition ?? null;
+                $optionsCount = $question->options ? $question->options->count() : 0;
+                $childrenCount = $question->childQuestions ? $question->childQuestions->count() : 0;
+            }
+            
+            $hasParent = $cod_padre ? 'SI' : 'NO';
+            $hasConditions = 'NO'; // Simplified for array compatibility
+            
+            return "Q{$id}: '{$title}' | Type: {$type_id} | Options: {$optionsCount} | Children: {$childrenCount} | HasParent: {$hasParent} | HasConditions: {$hasConditions} | MotherAnswer: " . ($mother_answer ?: 'NONE');
         })->toArray();
         
         \Log::info("getSurveyDetails for survey {$id} - Sections: {$survey->sections->count()}, Questions: {$survey->surveyQuestions->count()}");
@@ -558,7 +625,9 @@ class SurveyController extends Controller
 
         // Deduplicar secciones si hay duplicados por título
         $uniqueSections = $survey->sections->unique(function ($section) {
-            return strtolower(trim($section->title));
+            // Handle both array and object formats
+            $title = is_array($section) ? ($section['title'] ?? '') : ($section->title ?? '');
+            return strtolower(trim($title));
         })->values();
         
         if ($uniqueSections->count() !== $survey->sections->count()) {
@@ -1035,7 +1104,7 @@ private function updateSurveyStatusBasedOnDates($survey)
             // Contar respuestas desde la tabla notificationsurvays donde se almacenan las respuestas reales
             $count = \DB::table('notificationsurvays')
                 ->where('id_survey', $id)
-                ->where('state_results', true) // Solo contar respuestas completadas
+                ->where('state_results', '1') // Solo contar respuestas completadas (varchar '1')
                 ->whereNotNull('respondent_name') // Asegurar que hay un encuestado válido
                 ->count();
 
@@ -1229,7 +1298,8 @@ private function updateSurveyStatesAutomatic()
                 $needsUpdate = true;
             }
             elseif (!$shouldBeFinished && !$shouldBeScheduled && 
-                    !in_array($survey->publication_status, ['published', 'finished'])) {
+                    $survey->publication_status !== 'published') {
+                // Si no está finalizada ni programada (está activa), debe estar como 'published'
                 $newStatus = 'published';
                 $needsUpdate = true;
             }
@@ -1288,7 +1358,7 @@ private function validateSurveyQuestionsIntegrity($survey)
             
             // Validar que las preguntas de opción múltiple/única tengan opciones
             if (in_array($question->type_questions_id, [3, 4])) { // Opción única y múltiple
-                $optionsCount = DB::table('questionsoptions')
+                $optionsCount = DB::table('question_options')
                     ->where('questions_id', $question->id)
                     ->count();
                 

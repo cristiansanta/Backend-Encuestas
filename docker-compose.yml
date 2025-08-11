@@ -1,0 +1,14 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: encuestados_app
+    ports:
+      - 8000:8000
+    volumes:
+        - .:/var/www/html
+    environment:
+      - APACHE_DOCUMENT_ROOT=/var/www/html/public
+      - TZ=America/Bogota
+    restart: always

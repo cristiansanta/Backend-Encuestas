@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\QuestionModel;
 use App\Models\QuestionsoptionsModel;
+use App\Models\SurveyquestionsModel;
 use App\Services\QuestionIntegrityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
@@ -187,6 +188,33 @@ public function store(Request $request)
                         'creator_id' => $user->id,
                         'status' => true,
                     ]);
+                }
+            }
+        }
+        
+        // Si es una pregunta hija (cod_padre > 0), asociarla automáticamente con las encuestas de su padre
+        if ($question->cod_padre && $question->cod_padre > 0) {
+            // Buscar todas las encuestas que contienen la pregunta padre
+            $parentSurveys = SurveyquestionsModel::where('question_id', $question->cod_padre)->get();
+            
+            foreach ($parentSurveys as $parentSurvey) {
+                // Verificar si la pregunta hija ya existe en esta encuesta
+                $existingChildInSurvey = SurveyquestionsModel::where('survey_id', $parentSurvey->survey_id)
+                                                            ->where('question_id', $question->id)
+                                                            ->exists();
+                
+                if (!$existingChildInSurvey) {
+                    // Agregar la pregunta hija a la encuesta
+                    SurveyquestionsModel::create([
+                        'survey_id' => $parentSurvey->survey_id,
+                        'question_id' => $question->id,
+                        'section_id' => $parentSurvey->section_id, // Usar la misma sección del padre
+                        'creator_id' => $user->id,
+                        'user_id' => $user->id,
+                        'status' => true,
+                    ]);
+                    
+                    \Log::info("Child question {$question->id} automatically added to survey {$parentSurvey->survey_id} (parent: {$question->cod_padre})");
                 }
             }
         }

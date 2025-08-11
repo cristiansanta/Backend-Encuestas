@@ -149,6 +149,15 @@ class UserController extends Controller
         try {
             // Actualizar el campo 'active' si está presente en la solicitud
             if ($request->has('active')) {
+                // Evitar que un usuario se desactive a sí mismo
+                $currentUserId = auth()->id();
+                if ($currentUserId == $user->id && !$request->input('active')) {
+                    return response()->json([
+                        'error' => 'No puedes desactivarte a ti mismo',
+                        'details' => 'Por razones de seguridad, los usuarios no pueden desactivar sus propias cuentas'
+                    ], 403);
+                }
+                
                 $user->active = $request->input('active');
             }
 
