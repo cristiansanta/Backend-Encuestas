@@ -56,6 +56,12 @@ RUN chown -R www-data:www-data /var/www/html \
     && chmod -R 777 /var/www/html/storage \
     && chmod -R 777 /var/www/html/bootstrap/cache
 
+# Crear directorio de imágenes privadas y configurar permisos específicos
+RUN mkdir -p /var/www/html/storage/app/private/images \
+    && chown -R www-data:www-data /var/www/html/storage/app/private/images \
+    && chmod -R 755 /var/www/html/storage/app/private/images \
+    && chmod g+s /var/www/html/storage/app/private/images
+
 # Limpiar caché de Laravel
 RUN php artisan config:clear || true
 RUN php artisan cache:clear || true
@@ -65,8 +71,20 @@ RUN php artisan view:clear || true
 # Configurar Apache para puerto 8000
 RUN sed -i 's/Listen 80/Listen 8000/' /etc/apache2/ports.conf
 
+# Crear script de inicialización para permisos
+RUN echo '#!/bin/bash' > /usr/local/bin/setup-permissions.sh \
+    && echo 'echo "Configurando permisos de imágenes..."' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'mkdir -p /var/www/html/storage/app/private/images' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'chown -R www-data:www-data /var/www/html/storage/app/private/images' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'chmod -R 755 /var/www/html/storage/app/private/images' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'chmod g+s /var/www/html/storage/app/private/images' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'find /var/www/html/storage/app/private/images -type f -exec chmod 644 {} \;' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'echo "Permisos de imágenes configurados correctamente"' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'exec /usr/sbin/apachectl -D FOREGROUND' >> /usr/local/bin/setup-permissions.sh \
+    && chmod +x /usr/local/bin/setup-permissions.sh
+
 # Exponer puerto 8000
 EXPOSE 8000
 
-# Iniciar Apache como root (necesario para bind al puerto)
-CMD ["/usr/sbin/apachectl", "-D", "FOREGROUND"]
+# Iniciar con script de permisos
+CMD ["/usr/local/bin/setup-permissions.sh"]
