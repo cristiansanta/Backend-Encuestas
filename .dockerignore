@@ -1,1 +1,4 @@
 vendor
+storage/app/private
+storage/framework/views
+storage/logs

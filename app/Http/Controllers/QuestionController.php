@@ -95,18 +95,53 @@ public function store(Request $request)
     }
 
     // Buscar y decodificar imágenes en base64 dentro de la descripción
-    if (preg_match_all('/<img src="data:image\/[^;]+;base64,([^"]+)"/', $data['descrip'], $matches)) {
-        foreach ($matches[1] as $key => $base64Image) {
-            $imageData = base64_decode($base64Image);
-            $imageName = uniqid() . '.png'; // Generar un nombre único para cada imagen
-            $imagePath = 'private/images/' . $imageName; // Ruta en almacenamiento privado
-
-            // Almacenar la imagen en el sistema de archivos privado
-            Storage::disk('private')->put('images/' . $imageName, $imageData);
-
-            // Reemplazar la imagen base64 en el campo descrip con la ruta de la imagen guardada
-            $storagePath = '/storage/images/' . $imageName; // Ajustar la ruta de acceso
-            $data['descrip'] = str_replace($matches[0][$key], '<img src="' . $storagePath . '"', $data['descrip']);
+    if (preg_match_all('/<img src="data:image\/([^;]+);base64,([^"]+)"/', $data['descrip'], $matches)) {
+        foreach ($matches[2] as $key => $base64Image) {
+            try {
+                // Obtener el tipo MIME de la imagen
+                $mimeType = $matches[1][$key];
+                
+                // Validar tipos de archivo permitidos
+                $allowedTypes = ['png', 'jpeg', 'jpg', 'svg+xml'];
+                if (!in_array(strtolower($mimeType), $allowedTypes)) {
+                    \Log::warning('Tipo de imagen no permitido en pregunta: ' . $mimeType);
+                    continue; // Saltar esta imagen
+                }
+                
+                // Decodificar la imagen base64
+                $imageData = base64_decode($base64Image);
+                
+                // Validar que la decodificación fue exitosa
+                if ($imageData === false) {
+                    \Log::error('Error al decodificar imagen base64 en pregunta');
+                    continue;
+                }
+                
+                // Determinar la extensión correcta del archivo
+                $extension = $this->getImageExtension($mimeType);
+                $imageName = uniqid() . '.' . $extension;
+                
+                // Almacenar la imagen en el sistema de archivos privado
+                $stored = Storage::disk('private')->put('images/' . $imageName, $imageData);
+                
+                if ($stored) {
+                    // Establecer permisos correctos para que el servidor web pueda servir la imagen
+                    $fullPath = storage_path('app/private/images/' . $imageName);
+                    if (file_exists($fullPath)) {
+                        chmod($fullPath, 0644); // rw-r--r--
+                    }
+                    
+                    // Reemplazar la imagen base64 por la ruta del FileController
+                    $storagePath = '/api/storage/images/' . $imageName;
+                    $data['descrip'] = str_replace($matches[0][$key], '<img src="' . $storagePath . '"', $data['descrip']);
+                    \Log::info('Imagen de pregunta guardada exitosamente: ' . $imageName);
+                } else {
+                    \Log::error('Error al guardar imagen de pregunta: ' . $imageName);
+                }
+            } catch (\Exception $e) {
+                \Log::error('Error procesando imagen en pregunta: ' . $e->getMessage());
+                continue;
+            }
         }
     }
 
@@ -330,7 +365,60 @@ public function store(Request $request)
     
                 // Actualizar todos los campos
                 $question->title = $request->title;
-                $question->descrip = $request->descrip;
+                
+                // Procesar imágenes en base64 durante la actualización
+                $description = $request->descrip;
+                if (preg_match_all('/<img src="data:image\/([^;]+);base64,([^"]+)"/', $description, $matches)) {
+                    foreach ($matches[2] as $key => $base64Image) {
+                        try {
+                            // Obtener el tipo MIME de la imagen
+                            $mimeType = $matches[1][$key];
+                            
+                            // Validar tipos de archivo permitidos
+                            $allowedTypes = ['png', 'jpeg', 'jpg', 'svg+xml'];
+                            if (!in_array(strtolower($mimeType), $allowedTypes)) {
+                                \Log::warning('Tipo de imagen no permitido en actualización de pregunta: ' . $mimeType);
+                                continue; // Saltar esta imagen
+                            }
+                            
+                            // Decodificar la imagen base64
+                            $imageData = base64_decode($base64Image);
+                            
+                            // Validar que la decodificación fue exitosa
+                            if ($imageData === false) {
+                                \Log::error('Error al decodificar imagen base64 en actualización de pregunta');
+                                continue;
+                            }
+                            
+                            // Determinar la extensión correcta del archivo
+                            $extension = $this->getImageExtension($mimeType);
+                            $imageName = uniqid() . '.' . $extension;
+                            
+                            // Almacenar la imagen en el sistema de archivos privado
+                            $stored = Storage::disk('private')->put('images/' . $imageName, $imageData);
+                            
+                            if ($stored) {
+                                // Establecer permisos correctos para que el servidor web pueda servir la imagen
+                                $fullPath = storage_path('app/private/images/' . $imageName);
+                                if (file_exists($fullPath)) {
+                                    chmod($fullPath, 0644); // rw-r--r--
+                                }
+                                
+                                // Reemplazar la imagen base64 por la ruta del FileController
+                                $storagePath = '/api/storage/images/' . $imageName;
+                                $description = str_replace($matches[0][$key], '<img src="' . $storagePath . '"', $description);
+                                \Log::info('Imagen de pregunta actualizada exitosamente: ' . $imageName);
+                            } else {
+                                \Log::error('Error al guardar imagen actualizada de pregunta: ' . $imageName);
+                            }
+                        } catch (\Exception $e) {
+                            \Log::error('Error procesando imagen en actualización de pregunta: ' . $e->getMessage());
+                            continue;
+                        }
+                    }
+                }
+                
+                $question->descrip = $description;
                 $question->validate = $request->validate;
                 $question->cod_padre = $request->cod_padre;
                 $question->bank = $request->bank;
@@ -421,5 +509,20 @@ public function store(Request $request)
         } else {
             return response()->json(['message' => 'Question not found'], 404);
         }
+    }
+    
+    /**
+     * Obtener la extensión correcta basada en el tipo MIME
+     */
+    private function getImageExtension($mimeType)
+    {
+        $extensions = [
+            'png' => 'png',
+            'jpeg' => 'jpg',
+            'jpg' => 'jpg',
+            'svg+xml' => 'svg'
+        ];
+        
+        return $extensions[strtolower($mimeType)] ?? 'png';
     }
 }

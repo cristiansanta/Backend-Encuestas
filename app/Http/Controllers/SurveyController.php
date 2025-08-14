@@ -162,9 +162,15 @@ class SurveyController extends Controller
 
                 // Almacenar la imagen en el sistema de archivos privado
                 Storage::disk('private')->put('images/' . $imageName, $imageData);
+                
+                // Establecer permisos correctos para que el servidor web pueda servir la imagen
+                $fullPath = storage_path('app/private/images/' . $imageName);
+                if (file_exists($fullPath)) {
+                    chmod($fullPath, 0644); // rw-r--r--
+                }
 
-                // Reemplazar la imagen base64 por la ruta de almacenamiento privado
-                $storagePath = '/storage/images/' . $imageName; // Ajustamos la ruta de acceso
+                // Reemplazar la imagen base64 por la ruta del FileController
+                $storagePath = '/api/storage/images/' . $imageName; // Usar el FileController para servir imágenes
                 $data['descrip'] = str_replace($matches[0][$key], '<img src="' . $storagePath . '"', $data['descrip']);
             }
         }
@@ -300,7 +306,60 @@ class SurveyController extends Controller
         }
     
         if ($request->has('descrip')) {
-            $survey->descrip = $request->descrip;
+            $description = $request->descrip;
+            
+            // Buscar y decodificar imágenes en base64 dentro de la descripción durante actualización
+            if (preg_match_all('/<img src="data:image\/([^;]+);base64,([^"]+)"/', $description, $matches)) {
+                foreach ($matches[2] as $key => $base64Image) {
+                    try {
+                        // Obtener el tipo MIME de la imagen
+                        $mimeType = $matches[1][$key];
+                        
+                        // Validar tipos de archivo permitidos
+                        $allowedTypes = ['png', 'jpeg', 'jpg', 'svg+xml'];
+                        if (!in_array(strtolower($mimeType), $allowedTypes)) {
+                            \Log::warning('Tipo de imagen no permitido en actualización: ' . $mimeType);
+                            continue; // Saltar esta imagen
+                        }
+                        
+                        // Decodificar la imagen base64
+                        $imageData = base64_decode($base64Image);
+                        
+                        // Validar que la decodificación fue exitosa
+                        if ($imageData === false) {
+                            \Log::error('Error al decodificar imagen base64 en actualización');
+                            continue;
+                        }
+                        
+                        // Determinar la extensión correcta del archivo
+                        $extension = $this->getImageExtension($mimeType);
+                        $imageName = uniqid() . '.' . $extension;
+                        
+                        // Almacenar la imagen en el sistema de archivos privado
+                        $stored = Storage::disk('private')->put('images/' . $imageName, $imageData);
+                        
+                        if ($stored) {
+                            // Establecer permisos correctos para que el servidor web pueda servir la imagen
+                            $fullPath = storage_path('app/private/images/' . $imageName);
+                            if (file_exists($fullPath)) {
+                                chmod($fullPath, 0644); // rw-r--r--
+                            }
+                            
+                            // Reemplazar la imagen base64 por la ruta del FileController
+                            $storagePath = '/api/storage/images/' . $imageName;
+                            $description = str_replace($matches[0][$key], '<img src="' . $storagePath . '"', $description);
+                            \Log::info('Imagen actualizada exitosamente: ' . $imageName);
+                        } else {
+                            \Log::error('Error al guardar imagen actualizada: ' . $imageName);
+                        }
+                    } catch (\Exception $e) {
+                        \Log::error('Error procesando imagen en actualización de survey: ' . $e->getMessage());
+                        continue;
+                    }
+                }
+            }
+            
+            $survey->descrip = $description;
         }
     
         if ($request->has('id_category')) {
@@ -1548,4 +1607,19 @@ public function repairQuestions($id)
         ], 500);
     }
 }
+    
+    /**
+     * Obtener la extensión correcta basada en el tipo MIME
+     */
+    private function getImageExtension($mimeType)
+    {
+        $extensions = [
+            'png' => 'png',
+            'jpeg' => 'jpg',
+            'jpg' => 'jpg',
+            'svg+xml' => 'svg'
+        ];
+        
+        return $extensions[strtolower($mimeType)] ?? 'png';
+    }
 }
