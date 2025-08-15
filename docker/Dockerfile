@@ -48,7 +48,7 @@ WORKDIR /var/www/html
 COPY . .
 
 # Instalar dependencias de Composer
-RUN composer install --optimize-autoloader
+RUN composer install
 
 # Configurar permisos
 RUN chown -R www-data:www-data /var/www/html \
