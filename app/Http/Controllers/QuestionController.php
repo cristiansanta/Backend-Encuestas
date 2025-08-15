@@ -75,7 +75,8 @@ public function store(Request $request)
         'mother_answer_condition' => 'nullable|string|max:500',
         'section_id' => 'nullable|integer', // Añadido para soportar secciones
         'options' => 'nullable|array', // Añadido para soportar opciones
-        'options.*' => 'string|max:255', // Validar cada opción       
+        'options.*' => 'string|max:255', // Validar cada opción
+        'character_limit' => 'nullable|integer|min:1|max:250', // Límite de caracteres para preguntas abiertas
     ]);
 
     if ($validator->fails()) {
@@ -330,6 +331,7 @@ public function store(Request $request)
                     'questions_conditions' => 'required|boolean',
                     'mother_answer_condition' => 'nullable|string|max:500',
                     'section_id' => 'nullable|integer',
+                    'character_limit' => 'nullable|integer|min:1|max:250',
                 ]);
                 
                 // Validar integridad del tipo antes de actualizar
@@ -418,6 +420,7 @@ public function store(Request $request)
                 $question->questions_conditions = $request->questions_conditions;
                 $question->mother_answer_condition = $request->mother_answer_condition;
                 $question->section_id = $request->section_id;
+                $question->character_limit = $request->character_limit;
             }
     
             if ($question->save()) {

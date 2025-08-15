@@ -21,7 +21,8 @@ class QuestionModel extends Model
         'questions_conditions',
         'mother_answer_condition',
         'section_id',
-        'related_question'
+        'related_question',
+        'character_limit'
      ];
  
 

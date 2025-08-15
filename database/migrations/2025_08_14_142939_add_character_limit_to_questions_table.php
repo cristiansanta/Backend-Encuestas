@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('questions', function (Blueprint $table) {
-            //
+            $table->integer('character_limit')->nullable()->comment('Límite de caracteres para preguntas abiertas (máximo 250)');
         });
     }
 
@@ -22,7 +22,7 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('questions', function (Blueprint $table) {
-            //
+            $table->dropColumn('character_limit');
         });
     }
 };
