@@ -205,7 +205,7 @@ Route::middleware(['debug.auth', 'auth:sanctum'])->group(function () {
         Route::post('/store', 'store')->name('questions.store');
         Route::get('/{id}', 'show')->name('questions.show');
         Route::put('/{id}', 'update')->name('questions.update');
-        Route::put('/destroy/{id}', 'destroy')->name('questions.destroy');
+        Route::delete('/{id}', 'destroy')->name('questions.destroy');
         Route::get('/{id}/details', 'getQuestionDetails')->name('questions.getQuestionDetails');
     });
     
