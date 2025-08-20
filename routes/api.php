@@ -195,6 +195,7 @@ Route::middleware(['debug.auth', 'auth:sanctum'])->group(function () {
         Route::get('/{id}', 'show')->name('sections.show');
         Route::put('/{id}', 'update')->name('sections.update');
         Route::delete('/{id}', 'destroy')->name('sections.destroy');
+        Route::post('/{id}/remove-from-survey', 'removeFromSurvey')->name('sections.removeFromSurvey');
         Route::get('/survey/{id_survey}', 'getSectionsBySurvey')->name('sections.getSectionsBySurvey');
 
     });

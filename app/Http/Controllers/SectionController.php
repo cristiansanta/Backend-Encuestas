@@ -297,4 +297,116 @@ class SectionController extends Controller
         ], 500);
     }
 }
+
+    /**
+     * Remove section from survey (not from bank)
+     * Removes all questions of the section from the specific survey
+     */
+    public function removeFromSurvey(Request $request, string $sectionId)
+    {
+        try {
+            // Validar que se proporcione el survey_id
+            $validator = Validator::make($request->all(), [
+                'survey_id' => 'required|integer'
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'error' => 'survey_id es requerido',
+                    'details' => $validator->errors()
+                ], 422);
+            }
+
+            $surveyId = $request->survey_id;
+
+            // Verificar que la sección existe
+            $section = SectionModel::find($sectionId);
+            if (!$section) {
+                return response()->json(['message' => 'No se encontró la sección'], 404);
+            }
+
+            // Usar transacción para asegurar consistencia
+            return DB::transaction(function () use ($sectionId, $surveyId) {
+                // Obtener todas las preguntas de esta sección en esta encuesta específica
+                $surveyQuestions = DB::table('survey_questions as sq')
+                    ->join('questions as q', 'sq.question_id', '=', 'q.id')
+                    ->where('sq.survey_id', $surveyId)
+                    ->where('q.section_id', $sectionId)
+                    ->select('sq.id as survey_question_id', 'sq.question_id')
+                    ->get();
+
+                if ($surveyQuestions->isEmpty()) {
+                    return response()->json([
+                        'message' => 'No se encontraron preguntas de esta sección en la encuesta',
+                        'section_id' => $sectionId,
+                        'survey_id' => $surveyId
+                    ], 404);
+                }
+
+                $deletedQuestions = [];
+                $errors = [];
+
+                // Eliminar cada relación de pregunta-encuesta
+                foreach ($surveyQuestions as $sq) {
+                    try {
+                        $deleted = DB::table('survey_questions')
+                            ->where('id', $sq->survey_question_id)
+                            ->delete();
+
+                        if ($deleted) {
+                            $deletedQuestions[] = $sq->question_id;
+                        } else {
+                            $errors[] = "No se pudo eliminar la pregunta {$sq->question_id}";
+                        }
+                    } catch (\Exception $e) {
+                        $errors[] = "Error eliminando pregunta {$sq->question_id}: " . $e->getMessage();
+                    }
+                }
+
+                if (!empty($errors) && empty($deletedQuestions)) {
+                    // Si no se eliminó nada y hay errores
+                    return response()->json([
+                        'message' => 'Error al remover la sección de la encuesta',
+                        'errors' => $errors
+                    ], 500);
+                }
+
+                $response = [
+                    'message' => 'Sección removida de la encuesta exitosamente',
+                    'section_id' => $sectionId,
+                    'survey_id' => $surveyId,
+                    'questions_removed' => count($deletedQuestions),
+                    'removed_question_ids' => $deletedQuestions
+                ];
+
+                if (!empty($errors)) {
+                    $response['partial_errors'] = $errors;
+                    $response['message'] = 'Sección removida parcialmente de la encuesta';
+                }
+
+                // Log para auditoría
+                \Log::info('Section removed from survey', [
+                    'section_id' => $sectionId,
+                    'survey_id' => $surveyId,
+                    'questions_removed' => count($deletedQuestions),
+                    'removed_question_ids' => $deletedQuestions,
+                    'errors' => $errors
+                ]);
+
+                return response()->json($response, 200);
+            });
+
+        } catch (\Exception $e) {
+            \Log::error('Error removing section from survey', [
+                'section_id' => $sectionId,
+                'survey_id' => $request->survey_id ?? null,
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'error' => 'Error interno al remover la sección de la encuesta',
+                'details' => $e->getMessage()
+            ], 500);
+        }
+    }
 }
