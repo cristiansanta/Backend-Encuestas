@@ -77,6 +77,7 @@ public function store(Request $request)
         'options' => 'nullable|array', // Añadido para soportar opciones
         'options.*' => 'string|max:255', // Validar cada opción
         'character_limit' => 'nullable|integer|min:1|max:250', // Límite de caracteres para preguntas abiertas
+        'survey_id' => 'nullable|integer', // Añadido para asociar preguntas padre con encuestas
     ]);
 
     if ($validator->fails()) {
@@ -172,9 +173,10 @@ public function store(Request $request)
     }
 
     try {
-        // Separar las opciones de los datos de la pregunta
+        // Separar las opciones y survey_id de los datos de la pregunta
         $options = $request->input('options', []);
         unset($data['options']); // Remover opciones de los datos de la pregunta
+        unset($data['survey_id']); // Remover survey_id de los datos de la pregunta (no es campo de tabla questions)
         
         // Validar integridad antes de crear
         try {
@@ -221,6 +223,39 @@ public function store(Request $request)
                         'status' => true,
                     ]);
                 }
+            }
+        }
+        
+        // Si es una pregunta padre (cod_padre = 0) y se proporciona survey_id, agregarla a la encuesta
+        if ($question->cod_padre == 0 && $request->has('survey_id') && $request->survey_id) {
+            $surveyId = $request->survey_id;
+            
+            // Verificar que la encuesta existe
+            $surveyExists = DB::table('surveys')->where('id', $surveyId)->exists();
+            
+            if ($surveyExists) {
+                // Verificar si la pregunta ya está asociada con esta encuesta
+                $existingInSurvey = SurveyquestionsModel::where('survey_id', $surveyId)
+                                                        ->where('question_id', $question->id)
+                                                        ->exists();
+                
+                if (!$existingInSurvey) {
+                    // Agregar la pregunta padre a la encuesta
+                    SurveyquestionsModel::create([
+                        'survey_id' => $surveyId,
+                        'question_id' => $question->id,
+                        'section_id' => $question->section_id, // Usar la sección de la pregunta
+                        'creator_id' => $user->id,
+                        'user_id' => $user->id,
+                        'status' => true,
+                    ]);
+                    
+                    \Log::info("Parent question {$question->id} added to survey {$surveyId}");
+                } else {
+                    \Log::info("Parent question {$question->id} already exists in survey {$surveyId}");
+                }
+            } else {
+                \Log::warning("Survey {$surveyId} does not exist, cannot add parent question {$question->id}");
             }
         }
         
