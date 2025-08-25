@@ -73,7 +73,7 @@ RUN php artisan view:clear || true
 # Configurar Apache para puerto 8000
 RUN sed -i 's/Listen 80/Listen 8000/' /etc/apache2/ports.conf
 
-# Crear script de inicialización mejorado
+# Crear script de inicialización mejorado - Debugging
 RUN echo '#!/bin/bash' > /usr/local/bin/setup-permissions.sh \
     && echo 'echo "Configurando permisos de Laravel 12..."' >> /usr/local/bin/setup-permissions.sh \
     && echo '' >> /usr/local/bin/setup-permissions.sh \
