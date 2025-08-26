@@ -12,3 +12,8 @@ services:
       - APACHE_DOCUMENT_ROOT=/var/www/html/public
       - TZ=America/Bogota
     restart: always
+    networks:
+      - encuestas_encuestados-network
+networks:
+    encuestas_encuestados-network:
+      external: true

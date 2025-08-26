@@ -195,6 +195,7 @@ Route::middleware(['debug.auth', 'auth:sanctum'])->group(function () {
         Route::get('/{id}', 'show')->name('sections.show');
         Route::put('/{id}', 'update')->name('sections.update');
         Route::delete('/{id}', 'destroy')->name('sections.destroy');
+        Route::post('/{id}/remove-from-survey', 'removeFromSurvey')->name('sections.removeFromSurvey');
         Route::get('/survey/{id_survey}', 'getSectionsBySurvey')->name('sections.getSectionsBySurvey');
 
     });
@@ -205,7 +206,7 @@ Route::middleware(['debug.auth', 'auth:sanctum'])->group(function () {
         Route::post('/store', 'store')->name('questions.store');
         Route::get('/{id}', 'show')->name('questions.show');
         Route::put('/{id}', 'update')->name('questions.update');
-        Route::put('/destroy/{id}', 'destroy')->name('questions.destroy');
+        Route::delete('/{id}', 'destroy')->name('questions.destroy');
         Route::get('/{id}/details', 'getQuestionDetails')->name('questions.getQuestionDetails');
     });
     
