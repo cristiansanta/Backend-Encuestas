@@ -8,12 +8,17 @@ services:
       - 8000:8000
     volumes:
         - .:/var/www/html
+        - vendor_volume:/var/www/html/vendor
+    restart:
+        always
     environment:
       - APACHE_DOCUMENT_ROOT=/var/www/html/public
       - TZ=America/Bogota
-    restart: always
     networks:
-      - encuestas_encuestados-network
+      - encuestados_network
+volumes:
+  vendor_volume:
+
 networks:
-    encuestas_encuestados-network:
-      external: true
+    encuestados_network:
+        external: true
