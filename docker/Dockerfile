@@ -1,4 +1,4 @@
-FROM php:8.2-apache
+FROM php:8.3-apache
 
 # Configurar zona horaria
 ENV TZ=America/Bogota
@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     libzip-dev \
     zip \
     libcurl4 \
-    libcurl4-openssl-dev \ 
+    libcurl4-openssl-dev \
     unzip \
     libxml2-dev \
     postgresql-client \
@@ -48,13 +48,15 @@ WORKDIR /var/www/html
 COPY . .
 
 # Instalar dependencias de Composer
-RUN composer install
+RUN composer install --no-dev --optimize-autoloader
 
-# Configurar permisos
+# Configurar permisos mejorados
 RUN chown -R www-data:www-data /var/www/html \
-    && chmod -R 775 /var/www/html \
-    && chmod -R 777 /var/www/html/storage \
-    && chmod -R 777 /var/www/html/bootstrap/cache
+    && chmod -R 755 /var/www/html \
+    && chmod -R 775 /var/www/html/storage \
+    && chmod -R 775 /var/www/html/bootstrap/cache \
+    && find /var/www/html/storage -type f -exec chmod 664 {} \; \
+    && find /var/www/html/bootstrap/cache -type f -exec chmod 664 {} \;
 
 # Crear directorio de imágenes privadas y configurar permisos específicos
 RUN mkdir -p /var/www/html/storage/app/private/images \
@@ -71,15 +73,29 @@ RUN php artisan view:clear || true
 # Configurar Apache para puerto 8000
 RUN sed -i 's/Listen 80/Listen 8000/' /etc/apache2/ports.conf
 
-# Crear script de inicialización para permisos
+# Crear script de inicialización mejorado - Debugging
 RUN echo '#!/bin/bash' > /usr/local/bin/setup-permissions.sh \
-    && echo 'echo "Configurando permisos de imágenes..."' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'echo "Configurando permisos de Laravel 12..."' >> /usr/local/bin/setup-permissions.sh \
+    && echo '' >> /usr/local/bin/setup-permissions.sh \
+    && echo '# Crear directorios necesarios' >> /usr/local/bin/setup-permissions.sh \
     && echo 'mkdir -p /var/www/html/storage/app/private/images' >> /usr/local/bin/setup-permissions.sh \
-    && echo 'chown -R www-data:www-data /var/www/html/storage/app/private/images' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'mkdir -p /var/www/html/storage/logs' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'mkdir -p /var/www/html/storage/framework/{cache,sessions,views}' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'mkdir -p /var/www/html/bootstrap/cache' >> /usr/local/bin/setup-permissions.sh \
+    && echo '' >> /usr/local/bin/setup-permissions.sh \
+    && echo '# Configurar propietarios' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'chown -R www-data:www-data /var/www/html/storage' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'chown -R www-data:www-data /var/www/html/bootstrap/cache' >> /usr/local/bin/setup-permissions.sh \
+    && echo '' >> /usr/local/bin/setup-permissions.sh \
+    && echo '# Configurar permisos' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'chmod -R 775 /var/www/html/storage' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'chmod -R 775 /var/www/html/bootstrap/cache' >> /usr/local/bin/setup-permissions.sh \
     && echo 'chmod -R 755 /var/www/html/storage/app/private/images' >> /usr/local/bin/setup-permissions.sh \
-    && echo 'chmod g+s /var/www/html/storage/app/private/images' >> /usr/local/bin/setup-permissions.sh \
-    && echo 'find /var/www/html/storage/app/private/images -type f -exec chmod 644 {} \;' >> /usr/local/bin/setup-permissions.sh \
-    && echo 'echo "Permisos de imágenes configurados correctamente"' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'chmod g+s /var/www/html/storage' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'chmod g+s /var/www/html/bootstrap/cache' >> /usr/local/bin/setup-permissions.sh \
+    && echo '' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'echo "Permisos configurados correctamente"' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'php artisan --version' >> /usr/local/bin/setup-permissions.sh \
     && echo 'exec /usr/sbin/apachectl -D FOREGROUND' >> /usr/local/bin/setup-permissions.sh \
     && chmod +x /usr/local/bin/setup-permissions.sh
 
