@@ -146,32 +146,124 @@ public function store(Request $request)
     }
 
     // MEJORADO: Verificar si ya existe un registro similar para este usuario
-    // Detección de duplicados robusta que NO considera contexto de sección
-    // Una pregunta es duplicada por contenido, independientemente de su sección
-    $existingQuestion = QuestionModel::where('title', $data['title'])
-                                      ->where('descrip', $data['descrip'])
-                                      ->where('type_questions_id', $data['type_questions_id'])
-                                      ->where('creator_id', $user->id)
-                                      ->first();
+    // CORREGIDO: Para preguntas hijas, incluir cod_padre en la detección de duplicados
+    // Para preguntas padre (cod_padre = 0), mantener la lógica original
+    $duplicateQuery = QuestionModel::where('title', $data['title'])
+                                  ->where('descrip', $data['descrip'])
+                                  ->where('type_questions_id', $data['type_questions_id'])
+                                  ->where('creator_id', $user->id);
+    
+    // CRÍTICO: Para preguntas hijas (cod_padre > 0), incluir cod_padre en la búsqueda
+    if (isset($data['cod_padre']) && $data['cod_padre'] > 0) {
+        $duplicateQuery->where('cod_padre', $data['cod_padre']);
+        \Log::info('Child question duplicate check', [
+            'title' => $data['title'],
+            'cod_padre' => $data['cod_padre'],
+            'user_id' => $user->id
+        ]);
+    }
+    
+    $existingQuestion = $duplicateQuery->first();
+    
+    // NUEVO: Para preguntas hijas, también buscar una pregunta para actualizar
+    // (misma descripción, tipo y padre, pero título diferente)
+    $questionToUpdate = null;
+    if (isset($data['cod_padre']) && $data['cod_padre'] > 0 && !$existingQuestion) {
+        $questionToUpdate = QuestionModel::where('descrip', $data['descrip'])
+                                        ->where('type_questions_id', $data['type_questions_id'])
+                                        ->where('cod_padre', $data['cod_padre'])
+                                        ->where('creator_id', $user->id)
+                                        ->where('title', '!=', $data['title']) // Título diferente
+                                        ->first();
+        
+        \Log::info('Child question update check', [
+            'found_question_to_update' => $questionToUpdate ? true : false,
+            'question_to_update_id' => $questionToUpdate ? $questionToUpdate->id : null,
+            'question_to_update_data' => $questionToUpdate ? [
+                'id' => $questionToUpdate->id,
+                'current_title' => $questionToUpdate->title,
+                'new_title' => $data['title'],
+                'same_descrip' => $questionToUpdate->descrip === $data['descrip'],
+                'same_type' => $questionToUpdate->type_questions_id === $data['type_questions_id'],
+                'same_parent' => $questionToUpdate->cod_padre === $data['cod_padre']
+            ] : null
+        ]);
+    }
+    
+    // Log resultado de verificaciones
+    if ($existingQuestion || $questionToUpdate) {
+        \Log::info('Question check result', [
+            'found_duplicate' => $existingQuestion ? true : false,
+            'found_question_to_update' => $questionToUpdate ? true : false,
+            'question_id' => $existingQuestion ? $existingQuestion->id : ($questionToUpdate ? $questionToUpdate->id : null)
+        ]);
+    }
 
     if ($existingQuestion) {
-        // Log para debugging
+        // Log para debugging mejorado
         \Log::info('Question duplicate detected', [
             'existing_id' => $existingQuestion->id,
             'existing_title' => $existingQuestion->title,
+            'existing_cod_padre' => $existingQuestion->cod_padre,
             'existing_section_id' => $existingQuestion->section_id,
             'requested_title' => $data['title'],
+            'requested_cod_padre' => $data['cod_padre'] ?? 0,
             'requested_section_id' => $data['section_id'],
-            'user_id' => $user->id
+            'user_id' => $user->id,
+            'is_child_question' => isset($data['cod_padre']) && $data['cod_padre'] > 0
         ]);
         
+        $messageType = isset($data['cod_padre']) && $data['cod_padre'] > 0 
+            ? 'pregunta hija' 
+            : 'pregunta';
+            
         return response()->json([
             'id' => $existingQuestion->id,
-            'message' => 'La pregunta ya fue creada exitosamente (duplicado detectado por contenido)',
+            'message' => "La {$messageType} ya fue creada exitosamente (duplicado detectado)",
             'existing' => true,
-            'duplicate_reason' => 'same_title_description_type',
-            'note' => 'Las preguntas duplicadas se detectan por contenido, no por sección'
+            'duplicate_reason' => isset($data['cod_padre']) && $data['cod_padre'] > 0 
+                ? 'same_title_description_type_parent' 
+                : 'same_title_description_type',
+            'note' => isset($data['cod_padre']) && $data['cod_padre'] > 0 
+                ? 'Las preguntas hijas duplicadas se detectan por contenido Y relación padre-hija'
+                : 'Las preguntas duplicadas se detectan por contenido'
         ], 200);
+    }
+    
+    // NUEVO: Lógica de actualización para preguntas hijas
+    if ($questionToUpdate) {
+        try {
+            // Actualizar el título de la pregunta existente
+            $questionToUpdate->title = $data['title'];
+            $questionToUpdate->updated_at = now();
+            $questionToUpdate->save();
+            
+            \Log::info('Child question title updated', [
+                'question_id' => $questionToUpdate->id,
+                'old_title' => $questionToUpdate->getOriginal('title'),
+                'new_title' => $data['title'],
+                'cod_padre' => $questionToUpdate->cod_padre,
+                'operation' => 'title_update_instead_of_creation'
+            ]);
+            
+            return response()->json([
+                'id' => $questionToUpdate->id,
+                'message' => 'Pregunta hija actualizada exitosamente (título modificado)',
+                'updated' => true,
+                'operation' => 'title_update',
+                'old_title' => $questionToUpdate->getOriginal('title'),
+                'new_title' => $data['title'],
+                'note' => 'La pregunta existente fue actualizada en lugar de crear una duplicada'
+            ], 200);
+            
+        } catch (\Exception $e) {
+            \Log::error('Error updating child question title', [
+                'question_id' => $questionToUpdate->id,
+                'error' => $e->getMessage(),
+                'data' => $data
+            ]);
+            // Si falla la actualización, continuar con la creación normal
+        }
     }
 
     try {
