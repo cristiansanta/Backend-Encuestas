@@ -127,7 +127,9 @@ public function store(Request $request)
                 $stored = Storage::disk('private')->put('images/' . $imageName, $imageData);
                 
                 if ($stored) {
-                    // Los permisos se configuran automáticamente por el Dockerfile
+                    // Establecer permisos explícitos para que el servidor web pueda leer la imagen
+                    $fullPath = storage_path('app/private/images/' . $imageName);
+                    chmod($fullPath, 0644);
                     
                     // Reemplazar la imagen base64 por la ruta del FileController
                     $storagePath = '/api/storage/images/' . $imageName;
@@ -431,7 +433,9 @@ public function store(Request $request)
                             $stored = Storage::disk('private')->put('images/' . $imageName, $imageData);
                             
                             if ($stored) {
-                                // Los permisos se configuran automáticamente por el Dockerfile
+                                // Establecer permisos explícitos para que el servidor web pueda leer la imagen
+                                $fullPath = storage_path('app/private/images/' . $imageName);
+                                chmod($fullPath, 0644);
                                 
                                 // Reemplazar la imagen base64 por la ruta del FileController
                                 $storagePath = '/api/storage/images/' . $imageName;
