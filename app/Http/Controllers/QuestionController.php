@@ -127,7 +127,9 @@ public function store(Request $request)
                 $stored = Storage::disk('private')->put('images/' . $imageName, $imageData);
                 
                 if ($stored) {
-                    // Los permisos se configuran automáticamente por el Dockerfile
+                    // Establecer permisos explícitos para que el servidor web pueda leer la imagen
+                    $fullPath = storage_path('app/private/images/' . $imageName);
+                    chmod($fullPath, 0644);
                     
                     // Reemplazar la imagen base64 por la ruta del FileController
                     $storagePath = '/api/storage/images/' . $imageName;
@@ -144,32 +146,224 @@ public function store(Request $request)
     }
 
     // MEJORADO: Verificar si ya existe un registro similar para este usuario
-    // Detección de duplicados robusta que NO considera contexto de sección
-    // Una pregunta es duplicada por contenido, independientemente de su sección
-    $existingQuestion = QuestionModel::where('title', $data['title'])
-                                      ->where('descrip', $data['descrip'])
-                                      ->where('type_questions_id', $data['type_questions_id'])
-                                      ->where('creator_id', $user->id)
-                                      ->first();
+    // CORREGIDO: Para preguntas hijas, incluir cod_padre en la detección de duplicados
+    // Para preguntas padre (cod_padre = 0), mantener la lógica original
+    $duplicateQuery = QuestionModel::where('title', $data['title'])
+                                  ->where('descrip', $data['descrip'])
+                                  ->where('type_questions_id', $data['type_questions_id'])
+                                  ->where('creator_id', $user->id);
+    
+    // CRÍTICO: Para preguntas hijas (cod_padre > 0), incluir cod_padre en la búsqueda
+    if (isset($data['cod_padre']) && $data['cod_padre'] > 0) {
+        $duplicateQuery->where('cod_padre', $data['cod_padre']);
+        \Log::info('Child question duplicate check', [
+            'title' => $data['title'],
+            'cod_padre' => $data['cod_padre'],
+            'user_id' => $user->id
+        ]);
+    }
+    
+    $existingQuestion = $duplicateQuery->first();
+    
+    // NUEVO: SIEMPRE buscar una pregunta existente para actualizar - NUNCA crear nuevas
+    $questionToUpdate = null;
+    if (!$existingQuestion) {
+        // ESTRATEGIA: Buscar preguntas candidatas para actualizar en orden de prioridad
+        
+        if (isset($data['cod_padre']) && $data['cod_padre'] > 0) {
+            // Para preguntas hijas: buscar todas las preguntas hijas del mismo padre
+            $childQuestions = QuestionModel::where('cod_padre', $data['cod_padre'])
+                                          ->where('creator_id', $user->id)
+                                          ->get();
+            
+            \Log::info('NEVER_CREATE: Child questions found for update', [
+                'cod_padre' => $data['cod_padre'],
+                'child_questions_count' => $childQuestions->count(),
+                'child_question_ids' => $childQuestions->pluck('id')->toArray(),
+                'child_question_titles' => $childQuestions->pluck('title')->toArray()
+            ]);
+            
+            // Prioridad 1: Buscar por tipo de pregunta similar
+            $questionToUpdate = $childQuestions->where('type_questions_id', $data['type_questions_id'])->first();
+            
+            // Prioridad 2: Si no encuentra por tipo, tomar la primera disponible
+            if (!$questionToUpdate) {
+                $questionToUpdate = $childQuestions->first();
+            }
+            
+            \Log::info('NEVER_CREATE: Child question selected for update', [
+                'selected_question_id' => $questionToUpdate ? $questionToUpdate->id : null,
+                'selected_question_title' => $questionToUpdate ? $questionToUpdate->title : null,
+                'selection_method' => $questionToUpdate ? 'found_candidate' : 'no_candidate_found'
+            ]);
+            
+        } else {
+            // Para preguntas padre: buscar preguntas padre existentes del usuario
+            $parentQuestions = QuestionModel::where('creator_id', $user->id)
+                                           ->where('cod_padre', 0)
+                                           ->get();
+            
+            \Log::info('NEVER_CREATE: Parent questions found for update', [
+                'parent_questions_count' => $parentQuestions->count(),
+                'parent_question_ids' => $parentQuestions->pluck('id')->toArray(),
+                'parent_question_titles' => $parentQuestions->pluck('title')->toArray()
+            ]);
+            
+            // Prioridad 1: Buscar por sección si viene section_id
+            if (isset($data['section_id']) && $data['section_id']) {
+                $questionToUpdate = $parentQuestions->where('section_id', $data['section_id'])->first();
+            }
+            
+            // Prioridad 2: Buscar por tipo de pregunta
+            if (!$questionToUpdate && isset($data['type_questions_id'])) {
+                $questionToUpdate = $parentQuestions->where('type_questions_id', $data['type_questions_id'])->first();
+            }
+            
+            // Prioridad 3: Tomar la primera pregunta padre disponible
+            if (!$questionToUpdate) {
+                $questionToUpdate = $parentQuestions->first();
+            }
+            
+            \Log::info('NEVER_CREATE: Parent question selected for update', [
+                'selected_question_id' => $questionToUpdate ? $questionToUpdate->id : null,
+                'selected_question_title' => $questionToUpdate ? $questionToUpdate->title : null,
+                'selection_method' => $questionToUpdate ? 'found_candidate' : 'no_candidate_found'
+            ]);
+        }
+    }
+    
+    // Log resultado de verificaciones
+    if ($existingQuestion || $questionToUpdate) {
+        \Log::info('Question check result', [
+            'found_duplicate' => $existingQuestion ? true : false,
+            'found_question_to_update' => $questionToUpdate ? true : false,
+            'question_id' => $existingQuestion ? $existingQuestion->id : ($questionToUpdate ? $questionToUpdate->id : null)
+        ]);
+    }
 
     if ($existingQuestion) {
-        // Log para debugging
+        // Log para debugging mejorado
         \Log::info('Question duplicate detected', [
             'existing_id' => $existingQuestion->id,
             'existing_title' => $existingQuestion->title,
+            'existing_cod_padre' => $existingQuestion->cod_padre,
             'existing_section_id' => $existingQuestion->section_id,
             'requested_title' => $data['title'],
+            'requested_cod_padre' => $data['cod_padre'] ?? 0,
             'requested_section_id' => $data['section_id'],
-            'user_id' => $user->id
+            'user_id' => $user->id,
+            'is_child_question' => isset($data['cod_padre']) && $data['cod_padre'] > 0
+        ]);
+        
+        $messageType = isset($data['cod_padre']) && $data['cod_padre'] > 0 
+            ? 'pregunta hija' 
+            : 'pregunta';
+            
+        return response()->json([
+            'id' => $existingQuestion->id,
+            'message' => "La {$messageType} ya fue creada exitosamente (duplicado detectado)",
+            'existing' => true,
+            'duplicate_reason' => isset($data['cod_padre']) && $data['cod_padre'] > 0 
+                ? 'same_title_description_type_parent' 
+                : 'same_title_description_type',
+            'note' => isset($data['cod_padre']) && $data['cod_padre'] > 0 
+                ? 'Las preguntas hijas duplicadas se detectan por contenido Y relación padre-hija'
+                : 'Las preguntas duplicadas se detectan por contenido'
+        ], 200);
+    }
+    
+    // NUEVO: Lógica de actualización completa para cualquier campo
+    if ($questionToUpdate) {
+        try {
+            // Capturar valores originales para el log
+            $originalValues = [
+                'title' => $questionToUpdate->title,
+                'descrip' => $questionToUpdate->descrip,
+                'validate' => $questionToUpdate->validate,
+                'character_limit' => $questionToUpdate->character_limit,
+                'type_questions_id' => $questionToUpdate->type_questions_id,
+                'section_id' => $questionToUpdate->section_id,
+                'questions_conditions' => $questionToUpdate->questions_conditions,
+                'mother_answer_condition' => $questionToUpdate->mother_answer_condition,
+                'related_question' => $questionToUpdate->related_question
+            ];
+            
+            // Actualizar TODOS los campos que vengan en $data
+            if (isset($data['title'])) $questionToUpdate->title = $data['title'];
+            if (isset($data['descrip'])) $questionToUpdate->descrip = $data['descrip'];
+            if (isset($data['validate'])) $questionToUpdate->validate = $data['validate'];
+            if (isset($data['character_limit'])) $questionToUpdate->character_limit = $data['character_limit'];
+            if (isset($data['type_questions_id'])) $questionToUpdate->type_questions_id = $data['type_questions_id'];
+            if (isset($data['section_id'])) $questionToUpdate->section_id = $data['section_id'];
+            if (isset($data['questions_conditions'])) $questionToUpdate->questions_conditions = $data['questions_conditions'];
+            if (isset($data['mother_answer_condition'])) $questionToUpdate->mother_answer_condition = $data['mother_answer_condition'];
+            if (isset($data['related_question'])) $questionToUpdate->related_question = $data['related_question'];
+            
+            $questionToUpdate->updated_at = now();
+            $questionToUpdate->save();
+            
+            // Identificar qué campos cambiaron
+            $changedFields = [];
+            foreach ($originalValues as $field => $originalValue) {
+                if (isset($data[$field]) && $data[$field] != $originalValue) {
+                    $changedFields[$field] = [
+                        'old' => $originalValue,
+                        'new' => $data[$field]
+                    ];
+                }
+            }
+            
+            \Log::info('Question updated successfully', [
+                'question_id' => $questionToUpdate->id,
+                'question_type' => isset($data['cod_padre']) && $data['cod_padre'] > 0 ? 'child' : 'parent',
+                'cod_padre' => $questionToUpdate->cod_padre,
+                'changed_fields' => $changedFields,
+                'operation' => 'complete_update_instead_of_creation'
+            ]);
+            
+            $questionType = isset($data['cod_padre']) && $data['cod_padre'] > 0 ? 'hija' : 'padre';
+            $changedFieldsList = implode(', ', array_keys($changedFields));
+            
+            return response()->json([
+                'id' => $questionToUpdate->id,
+                'message' => "Pregunta {$questionType} actualizada exitosamente",
+                'updated' => true,
+                'operation' => 'complete_field_update',
+                'changed_fields' => $changedFields,
+                'fields_updated' => $changedFieldsList,
+                'note' => 'La pregunta existente fue actualizada completamente en lugar de crear una nueva'
+            ], 200);
+            
+        } catch (\Exception $e) {
+            \Log::error('Error updating question', [
+                'question_id' => $questionToUpdate->id,
+                'error' => $e->getMessage(),
+                'data' => $data
+            ]);
+            // Si falla la actualización, NO crear - devolver error
+            return response()->json([
+                'error' => 'No se pudo actualizar la pregunta existente',
+                'message' => 'Error en la actualización - creación de preguntas deshabilitada',
+                'question_id' => $questionToUpdate->id
+            ], 500);
+        }
+    }
+    
+    // NUNCA CREAR NUEVAS PREGUNTAS - Solo devolver error si no hay nada que actualizar
+    if (!$existingQuestion && !$questionToUpdate) {
+        \Log::error('NEVER_CREATE: No existing question found to update', [
+            'is_child_question' => isset($data['cod_padre']) && $data['cod_padre'] > 0,
+            'cod_padre' => $data['cod_padre'] ?? 0,
+            'user_id' => $user->id,
+            'title' => $data['title'],
+            'type_questions_id' => $data['type_questions_id']
         ]);
         
         return response()->json([
-            'id' => $existingQuestion->id,
-            'message' => 'La pregunta ya fue creada exitosamente (duplicado detectado por contenido)',
-            'existing' => true,
-            'duplicate_reason' => 'same_title_description_type',
-            'note' => 'Las preguntas duplicadas se detectan por contenido, no por sección'
-        ], 200);
+            'error' => 'No se encontró ninguna pregunta existente para actualizar',
+            'message' => 'La creación de preguntas está deshabilitada - solo se permiten actualizaciones',
+            'policy' => 'NEVER_CREATE_ONLY_UPDATE'
+        ], 422);
     }
 
     try {
@@ -177,6 +371,23 @@ public function store(Request $request)
         $options = $request->input('options', []);
         unset($data['options']); // Remover opciones de los datos de la pregunta
         unset($data['survey_id']); // Remover survey_id de los datos de la pregunta (no es campo de tabla questions)
+        
+        // NUNCA CREAR - Este código está deshabilitado para prevenir creación de preguntas
+        \Log::error('NEVER_CREATE: Reached forbidden creation code', [
+            'user_id' => $user->id,
+            'data' => $data,
+            'message' => 'Este código no debería ejecutarse - creación deshabilitada'
+        ]);
+        
+        return response()->json([
+            'error' => 'Código de creación alcanzado - esto no debería suceder',
+            'message' => 'La creación de preguntas está completamente deshabilitada',
+            'policy' => 'NEVER_CREATE_ONLY_UPDATE',
+            'debug' => 'Este bloque de código no debería haberse ejecutado'
+        ], 500);
+        
+        /*
+        // Código de creación original comentado - NUNCA ejecutar
         
         // Validar integridad antes de crear
         try {
@@ -205,9 +416,13 @@ public function store(Request $request)
         }
         
         $question = QuestionModel::create($data);
+        */
         
-        // Auditoría después de crear
+        // NUNCA CREAR - Este código tampoco debería ejecutarse
+        /*
+        // Auditoría después de crear - comentado
         QuestionIntegrityService::auditQuestionIntegrityChange('CREATE', null, $question, $user->id);
+        */
         
         // Crear opciones si fueron proporcionadas
         if (!empty($options) && is_array($options)) {
@@ -431,7 +646,9 @@ public function store(Request $request)
                             $stored = Storage::disk('private')->put('images/' . $imageName, $imageData);
                             
                             if ($stored) {
-                                // Los permisos se configuran automáticamente por el Dockerfile
+                                // Establecer permisos explícitos para que el servidor web pueda leer la imagen
+                                $fullPath = storage_path('app/private/images/' . $imageName);
+                                chmod($fullPath, 0644);
                                 
                                 // Reemplazar la imagen base64 por la ruta del FileController
                                 $storagePath = '/api/storage/images/' . $imageName;
