@@ -185,12 +185,23 @@ public function store(Request $request)
                 'incoming_title' => $data['title']
             ]);
             
-            // ONLY update if there's an exact title match (editing existing) or very specific conditions
-            $questionToUpdate = $childQuestions->where('title', $data['title'])->first();
-            
-            // If no exact title match, check if we have a specific question ID being updated
-            if (!$questionToUpdate && isset($data['question_id'])) {
+            // PRIORITIZE: If question_id is provided, use it first (for editing existing questions)
+            $questionToUpdate = null;
+            if (isset($data['question_id']) && $data['question_id'] > 0) {
                 $questionToUpdate = $childQuestions->where('id', $data['question_id'])->first();
+                \Log::info('SELECTIVE_UPDATE: Found question to update by ID', [
+                    'question_id' => $data['question_id'],
+                    'found' => $questionToUpdate ? 'yes' : 'no'
+                ]);
+            }
+            
+            // FALLBACK: If no question_id provided, try exact title match (for new questions with same title)
+            if (!$questionToUpdate) {
+                $questionToUpdate = $childQuestions->where('title', $data['title'])->first();
+                \Log::info('SELECTIVE_UPDATE: Searching by title match', [
+                    'title' => $data['title'],
+                    'found' => $questionToUpdate ? 'yes' : 'no'
+                ]);
             }
             
             \Log::info('SELECTIVE_UPDATE: Child question selected for update', [
