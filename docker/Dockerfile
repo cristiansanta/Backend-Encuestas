@@ -1,4 +1,4 @@
-FROM php:8.3-apache
+FROM php:8.2-apache
 
 # Configurar zona horaria
 ENV TZ=America/Bogota
@@ -75,7 +75,7 @@ RUN sed -i 's/Listen 80/Listen 8000/' /etc/apache2/ports.conf
 
 # Crear script de inicialización mejorado - Debugging
 RUN echo '#!/bin/bash' > /usr/local/bin/setup-permissions.sh \
-    && echo 'echo "Configurando permisos de Laravel 12..."' >> /usr/local/bin/setup-permissions.sh \
+    && echo 'echo "Configurando permisos de Laravel 11..."' >> /usr/local/bin/setup-permissions.sh \
     && echo '' >> /usr/local/bin/setup-permissions.sh \
     && echo '# Crear directorios necesarios' >> /usr/local/bin/setup-permissions.sh \
     && echo 'mkdir -p /var/www/html/storage/app/private/images' >> /usr/local/bin/setup-permissions.sh \
