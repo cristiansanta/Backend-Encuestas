@@ -32,6 +32,7 @@ class TemporarySurveyController extends Controller
             'sections' => 'nullable|array',
             'questions' => 'nullable|array',
             'categories' => 'nullable|array',
+            'child_question_conditions' => 'nullable|array',
             'status' => 'nullable|string|in:draft,in_progress'
         ]);
 
@@ -45,6 +46,7 @@ class TemporarySurveyController extends Controller
             'sections' => $validated['sections'] ?? null,
             'questions' => $validated['questions'] ?? null,
             'categories' => $validated['categories'] ?? null,
+            'child_question_conditions' => $validated['child_question_conditions'] ?? null,
             'status' => $validated['status'] ?? 'draft',
             'last_saved_at' => now()
         ]);

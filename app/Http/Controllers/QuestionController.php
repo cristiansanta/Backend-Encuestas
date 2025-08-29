@@ -171,30 +171,33 @@ public function store(Request $request)
         // ESTRATEGIA: Buscar preguntas candidatas para actualizar en orden de prioridad
         
         if (isset($data['cod_padre']) && $data['cod_padre'] > 0) {
-            // Para preguntas hijas: buscar todas las preguntas hijas del mismo padre
+            // Para preguntas hijas: buscar una pregunta hija específica para actualizar
+            // Solo actualizar si hay una coincidencia exacta de título O si es el mismo tipo y se está editando
             $childQuestions = QuestionModel::where('cod_padre', $data['cod_padre'])
                                           ->where('creator_id', $user->id)
                                           ->get();
             
-            \Log::info('NEVER_CREATE: Child questions found for update', [
+            \Log::info('SELECTIVE_UPDATE: Child questions found for potential update', [
                 'cod_padre' => $data['cod_padre'],
                 'child_questions_count' => $childQuestions->count(),
                 'child_question_ids' => $childQuestions->pluck('id')->toArray(),
-                'child_question_titles' => $childQuestions->pluck('title')->toArray()
+                'child_question_titles' => $childQuestions->pluck('title')->toArray(),
+                'incoming_title' => $data['title']
             ]);
             
-            // Prioridad 1: Buscar por tipo de pregunta similar
-            $questionToUpdate = $childQuestions->where('type_questions_id', $data['type_questions_id'])->first();
+            // ONLY update if there's an exact title match (editing existing) or very specific conditions
+            $questionToUpdate = $childQuestions->where('title', $data['title'])->first();
             
-            // Prioridad 2: Si no encuentra por tipo, tomar la primera disponible
-            if (!$questionToUpdate) {
-                $questionToUpdate = $childQuestions->first();
+            // If no exact title match, check if we have a specific question ID being updated
+            if (!$questionToUpdate && isset($data['question_id'])) {
+                $questionToUpdate = $childQuestions->where('id', $data['question_id'])->first();
             }
             
-            \Log::info('NEVER_CREATE: Child question selected for update', [
+            \Log::info('SELECTIVE_UPDATE: Child question selected for update', [
                 'selected_question_id' => $questionToUpdate ? $questionToUpdate->id : null,
                 'selected_question_title' => $questionToUpdate ? $questionToUpdate->title : null,
-                'selection_method' => $questionToUpdate ? 'found_candidate' : 'no_candidate_found'
+                'selection_method' => $questionToUpdate ? 'exact_match_found' : 'no_match_create_new',
+                'will_create_new' => !$questionToUpdate
             ]);
             
         } else {
@@ -350,20 +353,34 @@ public function store(Request $request)
     }
     
     // NUNCA CREAR NUEVAS PREGUNTAS - Solo devolver error si no hay nada que actualizar
+    // SOLUCIÓN: Permitir creación de preguntas hijas para encuestas sin publicar
     if (!$existingQuestion && !$questionToUpdate) {
-        \Log::error('NEVER_CREATE: No existing question found to update', [
-            'is_child_question' => isset($data['cod_padre']) && $data['cod_padre'] > 0,
-            'cod_padre' => $data['cod_padre'] ?? 0,
-            'user_id' => $user->id,
-            'title' => $data['title'],
-            'type_questions_id' => $data['type_questions_id']
-        ]);
+        $isChildQuestion = isset($data['cod_padre']) && $data['cod_padre'] > 0;
         
-        return response()->json([
-            'error' => 'No se encontró ninguna pregunta existente para actualizar',
-            'message' => 'La creación de preguntas está deshabilitada - solo se permiten actualizaciones',
-            'policy' => 'NEVER_CREATE_ONLY_UPDATE'
-        ], 422);
+        if ($isChildQuestion) {
+            \Log::info('CHILD_QUESTION_CREATION: Allowing creation of child question', [
+                'cod_padre' => $data['cod_padre'],
+                'user_id' => $user->id,
+                'title' => $data['title'],
+                'type_questions_id' => $data['type_questions_id'],
+                'policy' => 'ALLOW_CHILD_CREATION'
+            ]);
+            
+            // Continuar con la creación normal para preguntas hijas
+        } else {
+            \Log::error('NEVER_CREATE: No existing parent question found to update', [
+                'is_child_question' => false,
+                'user_id' => $user->id,
+                'title' => $data['title'],
+                'type_questions_id' => $data['type_questions_id']
+            ]);
+            
+            return response()->json([
+                'error' => 'No se encontró ninguna pregunta existente para actualizar',
+                'message' => 'La creación de preguntas padre está deshabilitada - solo se permiten actualizaciones',
+                'policy' => 'NEVER_CREATE_ONLY_UPDATE'
+            ], 422);
+        }
     }
 
     try {
@@ -372,22 +389,36 @@ public function store(Request $request)
         unset($data['options']); // Remover opciones de los datos de la pregunta
         unset($data['survey_id']); // Remover survey_id de los datos de la pregunta (no es campo de tabla questions)
         
-        // NUNCA CREAR - Este código está deshabilitado para prevenir creación de preguntas
-        \Log::error('NEVER_CREATE: Reached forbidden creation code', [
+        // POLICY: Only allow creation if no existing question was found to update
+        $isChildQuestion = isset($data['cod_padre']) && $data['cod_padre'] > 0;
+        
+        if (!$isChildQuestion) {
+            \Log::warning('SELECTIVE_CREATE: Parent question creation attempted', [
+                'user_id' => $user->id,
+                'title' => $data['title'] ?? 'unknown',
+                'message' => 'Permitiendo creación de pregunta padre solo si no existe candidato para actualizar'
+            ]);
+            
+            // Allow parent question creation in certain cases
+            // You can uncomment the return below if you want to strictly disable parent creation
+            /*
+            return response()->json([
+                'error' => 'Creación de preguntas padre deshabilitada',
+                'message' => 'Solo se permite crear preguntas hijas, no preguntas padre',
+                'policy' => 'NEVER_CREATE_PARENTS_ONLY_CHILDREN',
+            ], 422);
+            */
+        }
+        
+        \Log::info('QUESTION_CREATE: Creating new question', [
+            'cod_padre' => $data['cod_padre'] ?? 0,
             'user_id' => $user->id,
-            'data' => $data,
-            'message' => 'Este código no debería ejecutarse - creación deshabilitada'
+            'title' => $data['title'],
+            'type' => $isChildQuestion ? 'child' : 'parent',
+            'reason' => 'no_existing_question_found_to_update'
         ]);
         
-        return response()->json([
-            'error' => 'Código de creación alcanzado - esto no debería suceder',
-            'message' => 'La creación de preguntas está completamente deshabilitada',
-            'policy' => 'NEVER_CREATE_ONLY_UPDATE',
-            'debug' => 'Este bloque de código no debería haberse ejecutado'
-        ], 500);
-        
-        /*
-        // Código de creación original comentado - NUNCA ejecutar
+        // HABILITADO: Código de creación para preguntas hijas
         
         // Validar integridad antes de crear
         try {
@@ -416,13 +447,9 @@ public function store(Request $request)
         }
         
         $question = QuestionModel::create($data);
-        */
         
-        // NUNCA CREAR - Este código tampoco debería ejecutarse
-        /*
-        // Auditoría después de crear - comentado
+        // HABILITADO: Auditoría después de crear
         QuestionIntegrityService::auditQuestionIntegrityChange('CREATE', null, $question, $user->id);
-        */
         
         // Crear opciones si fueron proporcionadas
         if (!empty($options) && is_array($options)) {
@@ -476,10 +503,28 @@ public function store(Request $request)
         
         // Si es una pregunta hija (cod_padre > 0), asociarla automáticamente con las encuestas de su padre
         if ($question->cod_padre && $question->cod_padre > 0) {
+            // Verificar que la pregunta padre existe
+            $parentQuestion = QuestionModel::find($question->cod_padre);
+            if (!$parentQuestion) {
+                \Log::warning("Child question {$question->id} has invalid parent ID: {$question->cod_padre}");
+                return response()->json([
+                    'error' => 'La pregunta padre no existe',
+                    'message' => 'No se puede crear una pregunta hija con un padre inexistente',
+                    'parent_id' => $question->cod_padre
+                ], 422);
+            }
+            
             // Buscar todas las encuestas que contienen la pregunta padre
             $parentSurveys = SurveyquestionsModel::where('question_id', $question->cod_padre)->get();
             
+            if ($parentSurveys->isEmpty()) {
+                \Log::info("Child question {$question->id} created but parent {$question->cod_padre} is not associated with any survey yet");
+            }
+            
             foreach ($parentSurveys as $parentSurvey) {
+                // Verificar el estado de la encuesta para preguntas hijas
+                $survey = \App\Models\SurveyModel::find($parentSurvey->survey_id);
+                
                 // Verificar si la pregunta hija ya existe en esta encuesta
                 $existingChildInSurvey = SurveyquestionsModel::where('survey_id', $parentSurvey->survey_id)
                                                             ->where('question_id', $question->id)
@@ -496,7 +541,8 @@ public function store(Request $request)
                         'status' => true,
                     ]);
                     
-                    \Log::info("Child question {$question->id} automatically added to survey {$parentSurvey->survey_id} (parent: {$question->cod_padre})");
+                    $surveyStatus = $survey ? ($survey->publication_status ?? 'unknown') : 'unknown';
+                    \Log::info("Child question {$question->id} automatically added to survey {$parentSurvey->survey_id} (status: {$surveyStatus}, parent: {$question->cod_padre})");
                 }
             }
         }

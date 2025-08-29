@@ -21,6 +21,7 @@ class TemporarySurveyModel extends Model
         'sections',
         'questions',
         'categories',
+        'child_question_conditions',
         'status',
         'last_saved_at'
     ];
@@ -30,6 +31,7 @@ class TemporarySurveyModel extends Model
         'sections' => 'array',
         'questions' => 'array',
         'categories' => 'array',
+        'child_question_conditions' => 'array',
         'start_date' => 'datetime',
         'end_date' => 'datetime',
         'last_saved_at' => 'datetime'
@@ -59,6 +61,11 @@ class TemporarySurveyModel extends Model
         
         if (isset($data['questions'])) {
             $this->questions = $data['questions'];
+        }
+        
+        // Guardar condiciones de preguntas hijas si existen
+        if (isset($data['child_question_conditions'])) {
+            $this->child_question_conditions = $data['child_question_conditions'];
         }
         
         $this->last_saved_at = now();
