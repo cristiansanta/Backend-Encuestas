@@ -21,8 +21,15 @@ yarn-error.log
 # Ignorar todos los archivos de respaldo de editores
 *.swp
 
-# Ignorar composer.lock (archivo de dependencias)
+# Ignorar composer.lock (archivo de dependencias) y demás archivos de administración
 composer.lock
+
+# Ignorar archivos de configuración CORS
+/config/cors.php
+/app/Http/Middleware/Cors.php
+
+# Ignorar configuración de servidor web
+.htaccess
 
 # Ignorar migraciones específicas
 #database/migrations/*.php
