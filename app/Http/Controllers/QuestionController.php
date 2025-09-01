@@ -212,30 +212,41 @@ public function store(Request $request)
             ]);
             
         } else {
-            // Para preguntas padre: buscar preguntas padre existentes del usuario
-            $parentQuestions = QuestionModel::where('creator_id', $user->id)
-                                           ->where('cod_padre', 0)
-                                           ->get();
-            
-            \Log::info('NEVER_CREATE: Parent questions found for update', [
-                'parent_questions_count' => $parentQuestions->count(),
-                'parent_question_ids' => $parentQuestions->pluck('id')->toArray(),
-                'parent_question_titles' => $parentQuestions->pluck('title')->toArray()
-            ]);
-            
-            // Prioridad 1: Buscar por sección si viene section_id
-            if (isset($data['section_id']) && $data['section_id']) {
-                $questionToUpdate = $parentQuestions->where('section_id', $data['section_id'])->first();
-            }
-            
-            // Prioridad 2: Buscar por tipo de pregunta
-            if (!$questionToUpdate && isset($data['type_questions_id'])) {
-                $questionToUpdate = $parentQuestions->where('type_questions_id', $data['type_questions_id'])->first();
-            }
-            
-            // Prioridad 3: Tomar la primera pregunta padre disponible
-            if (!$questionToUpdate) {
-                $questionToUpdate = $parentQuestions->first();
+            // Para preguntas padre: SKIP UPDATE LOGIC IF QUESTION IS FOR BANK
+            if (isset($data['bank']) && $data['bank'] === true) {
+                \Log::info('BANK_QUESTION: Skipping update logic for bank question - allowing new creation', [
+                    'user_id' => $user->id,
+                    'title' => $data['title'],
+                    'bank' => $data['bank']
+                ]);
+                // No buscar preguntas para actualizar - siempre crear nuevas para el banco
+                $questionToUpdate = null;
+            } else {
+                // Para preguntas NO del banco: buscar preguntas padre existentes del usuario
+                $parentQuestions = QuestionModel::where('creator_id', $user->id)
+                                               ->where('cod_padre', 0)
+                                               ->get();
+                
+                \Log::info('NEVER_CREATE: Parent questions found for update', [
+                    'parent_questions_count' => $parentQuestions->count(),
+                    'parent_question_ids' => $parentQuestions->pluck('id')->toArray(),
+                    'parent_question_titles' => $parentQuestions->pluck('title')->toArray()
+                ]);
+                
+                // Prioridad 1: Buscar por sección si viene section_id
+                if (isset($data['section_id']) && $data['section_id']) {
+                    $questionToUpdate = $parentQuestions->where('section_id', $data['section_id'])->first();
+                }
+                
+                // Prioridad 2: Buscar por tipo de pregunta
+                if (!$questionToUpdate && isset($data['type_questions_id'])) {
+                    $questionToUpdate = $parentQuestions->where('type_questions_id', $data['type_questions_id'])->first();
+                }
+                
+                // Prioridad 3: Tomar la primera pregunta padre disponible
+                if (!$questionToUpdate) {
+                    $questionToUpdate = $parentQuestions->first();
+                }
             }
             
             \Log::info('NEVER_CREATE: Parent question selected for update', [
@@ -379,18 +390,30 @@ public function store(Request $request)
             
             // Continuar con la creación normal para preguntas hijas
         } else {
-            \Log::error('NEVER_CREATE: No existing parent question found to update', [
-                'is_child_question' => false,
-                'user_id' => $user->id,
-                'title' => $data['title'],
-                'type_questions_id' => $data['type_questions_id']
-            ]);
-            
-            return response()->json([
-                'error' => 'No se encontró ninguna pregunta existente para actualizar',
-                'message' => 'La creación de preguntas padre está deshabilitada - solo se permiten actualizaciones',
-                'policy' => 'NEVER_CREATE_ONLY_UPDATE'
-            ], 422);
+            // SKIP THIS VALIDATION FOR BANK QUESTIONS
+            if (isset($data['bank']) && $data['bank'] === true) {
+                \Log::info('BANK_QUESTION: Allowing parent question creation for bank', [
+                    'is_child_question' => false,
+                    'user_id' => $user->id,
+                    'title' => $data['title'],
+                    'type_questions_id' => $data['type_questions_id'],
+                    'bank' => $data['bank']
+                ]);
+                // Continue with creation for bank questions
+            } else {
+                \Log::error('NEVER_CREATE: No existing parent question found to update', [
+                    'is_child_question' => false,
+                    'user_id' => $user->id,
+                    'title' => $data['title'],
+                    'type_questions_id' => $data['type_questions_id']
+                ]);
+                
+                return response()->json([
+                    'error' => 'No se encontró ninguna pregunta existente para actualizar',
+                    'message' => 'La creación de preguntas padre está deshabilitada - solo se permiten actualizaciones',
+                    'policy' => 'NEVER_CREATE_ONLY_UPDATE'
+                ], 422);
+            }
         }
     }
 
