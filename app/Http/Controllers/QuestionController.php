@@ -598,9 +598,9 @@ public function store(Request $request)
     {
         
         //motrar las categorias
-        $question = QuestionModel::find($id);
+        $question = QuestionModel::with(['options', 'type'])->find($id);
         if ($question) {
-            return response()->json($question); // Cambiado para devolver JSON
+            return response()->json($question); // Cambiado para devolver JSON con opciones
             //return view('surveys.show', compact('survey'));
         } else {
             return response()->json(['message' => 'No se encontró la pregunta'], 404);
@@ -615,9 +615,9 @@ public function store(Request $request)
     {
         
            //editar
-           $question = QuestionModel::find($id);
+           $question = QuestionModel::with(['options', 'type'])->find($id);
            if ($question) {
-               return response()->json($question); // Cambiado para devolver JSON
+               return response()->json($question); // Cambiado para devolver JSON con opciones
                //return view('surveys.edit', compact('survey'));
            } else {
                return response()->json(['message' => 'No se encontró la pregunta'], 404);

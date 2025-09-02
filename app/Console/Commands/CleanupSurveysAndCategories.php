@@ -8,6 +8,7 @@ use App\Models\CategoryModel;
 use App\Models\SectionModel;
 use App\Models\SurveyquestionsModel;
 use App\Models\QuestionModel;
+use App\Models\QuestionsoptionsModel;
 use App\Models\TemporarySurveyModel;
 use App\Models\SurveyAnswersModel;
 use Illuminate\Support\Facades\DB;
@@ -23,6 +24,8 @@ class CleanupSurveysAndCategories extends Command
                             {--all : Eliminar todas las encuestas y categorías}
                             {--surveys : Solo eliminar encuestas}
                             {--categories : Solo eliminar categorías huérfanas}
+                            {--questions : Solo eliminar preguntas huérfanas}
+                            {--options : Solo eliminar opciones de respuesta huérfanas}
                             {--dry-run : Mostrar qué se eliminaría sin ejecutar}
                             {--force : Forzar eliminación sin confirmación}';
 
@@ -56,6 +59,10 @@ class CleanupSurveysAndCategories extends Command
             $this->cleanupSurveys($dryRun, $force);
         } elseif ($this->option('categories')) {
             $this->cleanupOrphanCategories($dryRun, $force);
+        } elseif ($this->option('questions')) {
+            $this->cleanupOrphanQuestions($dryRun, $force);
+        } elseif ($this->option('options')) {
+            $this->cleanupOrphanOptions($dryRun, $force);
         } else {
             $this->showMenu($dryRun, $force);
         }
@@ -75,6 +82,9 @@ class CleanupSurveysAndCategories extends Command
         $surveyQuestionsCount = SurveyquestionsModel::count();
         $temporaryCount = TemporarySurveyModel::count();
         $answersCount = SurveyAnswersModel::count();
+        $optionsCount = QuestionsoptionsModel::count();
+        $orphanOptionsCount = QuestionsoptionsModel::whereDoesntHave('question')->count();
+        $orphanQuestionsCount = QuestionModel::whereDoesntHave('surveyQuestions')->count();
 
         $this->info('📊 Estadísticas actuales:');
         $this->table(['Tabla', 'Registros'], [
@@ -82,6 +92,9 @@ class CleanupSurveysAndCategories extends Command
             ['Categorías', $categoriesCount],
             ['Secciones', $sectionsCount],
             ['Preguntas', $questionsCount],
+            ['Preguntas huérfanas (sin encuesta)', $orphanQuestionsCount],
+            ['Opciones de respuesta', $optionsCount],
+            ['Opciones huérfanas', $orphanOptionsCount],
             ['Survey-Questions (pivot)', $surveyQuestionsCount],
             ['Encuestas temporales', $temporaryCount],
             ['Respuestas de encuestas', $answersCount],
@@ -99,6 +112,10 @@ class CleanupSurveysAndCategories extends Command
                 'all' => 'Todo (encuestas, categorías y datos relacionados)',
                 'surveys' => 'Solo encuestas',
                 'categories' => 'Solo categorías huérfanas',
+                'questions' => 'Solo preguntas huérfanas (sin encuesta)',
+                'all_questions' => 'TODAS las preguntas (peligroso)',
+                'options' => 'Solo opciones de respuesta huérfanas',
+                'problematic_options' => 'Solo opciones problemáticas (f, x, d)',
                 'temporary' => 'Solo encuestas temporales',
                 'specific' => 'Encuestas específicas',
                 'cancel' => 'Cancelar'
@@ -115,6 +132,18 @@ class CleanupSurveysAndCategories extends Command
                 break;
             case 'categories':
                 $this->cleanupOrphanCategories($dryRun, $force);
+                break;
+            case 'questions':
+                $this->cleanupOrphanQuestions($dryRun, $force);
+                break;
+            case 'all_questions':
+                $this->cleanupAllQuestions($dryRun, $force);
+                break;
+            case 'options':
+                $this->cleanupOrphanOptions($dryRun, $force);
+                break;
+            case 'problematic_options':
+                $this->cleanupProblematicOptions($dryRun, $force);
                 break;
             case 'temporary':
                 $this->cleanupTemporarySurveys($dryRun, $force);
@@ -142,6 +171,8 @@ class CleanupSurveysAndCategories extends Command
 
         $this->cleanupSurveys($dryRun, true);
         $this->cleanupOrphanCategories($dryRun, true);
+        $this->cleanupOrphanQuestions($dryRun, true);
+        $this->cleanupOrphanOptions($dryRun, true);
         $this->cleanupTemporarySurveys($dryRun, true);
     }
 
@@ -320,6 +351,188 @@ class CleanupSurveysAndCategories extends Command
 
         if (!$dryRun) {
             $this->info("✅ {$deletedCount} encuestas específicas eliminadas");
+        }
+    }
+
+    /**
+     * Limpiar opciones de respuesta huérfanas (sin pregunta asociada)
+     */
+    private function cleanupOrphanOptions($dryRun, $force)
+    {
+        $orphanOptions = QuestionsoptionsModel::whereDoesntHave('question')->get();
+        
+        if ($orphanOptions->isEmpty()) {
+            $this->info('No hay opciones de respuesta huérfanas para eliminar');
+            return;
+        }
+
+        $this->info("🔍 Encontradas {$orphanOptions->count()} opciones de respuesta huérfanas");
+
+        if (!$force && !$dryRun && !$this->confirm('¿Confirmas la eliminación de opciones sin pregunta asociada?')) {
+            $this->info('Operación cancelada');
+            return;
+        }
+
+        $deletedCount = 0;
+
+        foreach ($orphanOptions as $option) {
+            if ($dryRun) {
+                $this->line("🗑️  [DRY-RUN] Se eliminaría opción huérfana: '{$option->options}' (ID: {$option->id}, questions_id: {$option->questions_id})");
+            } else {
+                $option->delete();
+                $this->line("✅ Eliminada opción huérfana: '{$option->options}' (ID: {$option->id})");
+                $deletedCount++;
+            }
+        }
+
+        if (!$dryRun) {
+            $this->info("✅ {$deletedCount} opciones de respuesta huérfanas eliminadas");
+        }
+    }
+
+    /**
+     * Limpiar opciones problemáticas específicas (f, x, d)
+     */
+    private function cleanupProblematicOptions($dryRun, $force)
+    {
+        $problematicOptions = QuestionsoptionsModel::whereIn('options', ['f', 'x', 'd'])->get();
+        
+        if ($problematicOptions->isEmpty()) {
+            $this->info('No hay opciones problemáticas (f, x, d) para eliminar');
+            return;
+        }
+
+        $this->info("🔍 Encontradas {$problematicOptions->count()} opciones problemáticas");
+        
+        // Mostrar información detallada de las opciones problemáticas
+        $this->info('📋 Opciones problemáticas encontradas:');
+        $this->table(['ID', 'Pregunta ID', 'Opción', 'Creada'], 
+            $problematicOptions->map(function($option) {
+                return [$option->id, $option->questions_id, $option->options, $option->created_at];
+            })->toArray()
+        );
+
+        if (!$force && !$dryRun && !$this->confirm('¿Confirmas la eliminación de estas opciones problemáticas?')) {
+            $this->info('Operación cancelada');
+            return;
+        }
+
+        $deletedCount = 0;
+
+        foreach ($problematicOptions as $option) {
+            if ($dryRun) {
+                $this->line("🗑️  [DRY-RUN] Se eliminaría opción problemática: '{$option->options}' (ID: {$option->id}, Pregunta: {$option->questions_id})");
+            } else {
+                $option->delete();
+                $this->line("✅ Eliminada opción problemática: '{$option->options}' (ID: {$option->id}, Pregunta: {$option->questions_id})");
+                $deletedCount++;
+            }
+        }
+
+        if (!$dryRun) {
+            $this->info("✅ {$deletedCount} opciones problemáticas eliminadas");
+        }
+    }
+
+    /**
+     * Limpiar preguntas huérfanas (sin encuesta asociada)
+     */
+    private function cleanupOrphanQuestions($dryRun, $force)
+    {
+        $orphanQuestions = QuestionModel::whereDoesntHave('surveyQuestions')->with('options')->get();
+        
+        if ($orphanQuestions->isEmpty()) {
+            $this->info('No hay preguntas huérfanas para eliminar');
+            return;
+        }
+
+        $this->info("🔍 Encontradas {$orphanQuestions->count()} preguntas huérfanas (sin encuesta asociada)");
+
+        // Contar opciones asociadas que también se eliminarán
+        $totalOptions = $orphanQuestions->sum(function($question) {
+            return $question->options->count();
+        });
+
+        if ($totalOptions > 0) {
+            $this->warn("⚠️  Esto también eliminará {$totalOptions} opciones de respuesta asociadas");
+        }
+
+        if (!$force && !$dryRun && !$this->confirm('¿Confirmas la eliminación de preguntas sin encuesta asociada?')) {
+            $this->info('Operación cancelada');
+            return;
+        }
+
+        $deletedCount = 0;
+        $deletedOptionsCount = 0;
+
+        foreach ($orphanQuestions as $question) {
+            $optionsCount = $question->options->count();
+            
+            if ($dryRun) {
+                $this->line("🗑️  [DRY-RUN] Se eliminaría pregunta huérfana: '{$question->title}' (ID: {$question->id}) con {$optionsCount} opciones");
+            } else {
+                $question->delete(); // Las opciones se eliminan por cascada
+                $this->line("✅ Eliminada pregunta huérfana: '{$question->title}' (ID: {$question->id}) con {$optionsCount} opciones");
+                $deletedCount++;
+                $deletedOptionsCount += $optionsCount;
+            }
+        }
+
+        if (!$dryRun) {
+            $this->info("✅ {$deletedCount} preguntas huérfanas eliminadas junto con {$deletedOptionsCount} opciones");
+        }
+    }
+
+    /**
+     * Limpiar TODAS las preguntas (peligroso)
+     */
+    private function cleanupAllQuestions($dryRun, $force)
+    {
+        $allQuestions = QuestionModel::with('options')->get();
+        
+        if ($allQuestions->isEmpty()) {
+            $this->info('No hay preguntas para eliminar');
+            return;
+        }
+
+        $this->error("⚠️  PELIGRO: Esto eliminará TODAS las {$allQuestions->count()} preguntas del sistema");
+        
+        $totalOptions = $allQuestions->sum(function($question) {
+            return $question->options->count();
+        });
+
+        $this->error("⚠️  También eliminará {$totalOptions} opciones de respuesta");
+
+        if (!$force && !$dryRun) {
+            $this->error('Esta es una operación DESTRUCTIVA que eliminará TODAS las preguntas');
+            if (!$this->confirm('¿Estás ABSOLUTAMENTE seguro? Esta acción NO se puede deshacer')) {
+                $this->info('Operación cancelada (sensato)');
+                return;
+            }
+            if (!$this->confirm('Confirma por segunda vez: ¿Eliminar TODAS las preguntas?')) {
+                $this->info('Operación cancelada');
+                return;
+            }
+        }
+
+        $deletedCount = 0;
+        $deletedOptionsCount = 0;
+
+        foreach ($allQuestions as $question) {
+            $optionsCount = $question->options->count();
+            
+            if ($dryRun) {
+                $this->line("🗑️  [DRY-RUN] Se eliminaría pregunta: '{$question->title}' (ID: {$question->id}) con {$optionsCount} opciones");
+            } else {
+                $question->delete();
+                $this->line("✅ Eliminada pregunta: '{$question->title}' (ID: {$question->id}) con {$optionsCount} opciones");
+                $deletedCount++;
+                $deletedOptionsCount += $optionsCount;
+            }
+        }
+
+        if (!$dryRun) {
+            $this->info("✅ {$deletedCount} preguntas eliminadas junto con {$deletedOptionsCount} opciones");
         }
     }
 }
