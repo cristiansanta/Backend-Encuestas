@@ -67,5 +67,11 @@ class QuestionModel extends Model
     {
         return $this->belongsTo(SectionModel::class, 'section_id');
     }
+
+    // Relación belongsTo con User (creador de la pregunta)
+    public function creator()
+    {
+        return $this->belongsTo(User::class, 'creator_id');
+    }
 }
 

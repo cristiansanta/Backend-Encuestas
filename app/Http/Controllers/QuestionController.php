@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\QuestionModel;
 use App\Models\QuestionsoptionsModel;
 use App\Models\SurveyquestionsModel;
+use App\Models\User;
 use App\Services\QuestionIntegrityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
@@ -28,8 +29,16 @@ class QuestionController extends Controller
         
         $query = QuestionModel::query();
         
-        // Filtrar por el usuario creador
-        $query->where('creator_id', $user->id);
+        // Aplicar filtros de visibilidad según permisos
+        $query->where(function($q) use ($user) {
+            // Incluir preguntas del propio usuario
+            $q->where('creator_id', $user->id);
+            
+            // Incluir preguntas de otros usuarios que tengan el permiso habilitado
+            $q->orWhereHas('creator', function($userQuery) {
+                $userQuery->where('allow_view_questions_categories', true);
+            });
+        });
         
         // Filtrar por banco si se especifica
         if ($request->has('bank')) {
@@ -48,7 +57,10 @@ class QuestionController extends Controller
         
         // Incluir relaciones si se solicita
         if ($request->has('with_details')) {
-            $query->with(['type', 'options']);
+            $query->with(['type', 'options', 'creator:id,name']);
+        } else {
+            // Siempre incluir información básica del creador para mostrar la propiedad
+            $query->with(['creator:id,name']);
         }
         
         $questions = $query->get();

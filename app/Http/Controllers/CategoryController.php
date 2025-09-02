@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\CategoryModel;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 
@@ -18,11 +19,27 @@ class CategoryController extends Controller
             return response()->json(['message' => 'Usuario no autenticado'], 401);
         }
         
-        // Listado de categorías del usuario ordenadas de mayor a menor por el campo 'id'
-        $category = CategoryModel::where('user_create', $user->name)
-                                 ->orderBy('id', 'desc')
-                                 ->get();
-        return response()->json($category);
+        // Aplicar filtros de visibilidad según permisos
+        $query = CategoryModel::query();
+        
+        $query->where(function($q) use ($user) {
+            // Incluir categorías del propio usuario (por compatibilidad con el campo user_create)
+            $q->where('user_create', $user->name);
+            
+            // Incluir categorías de otros usuarios que tengan el permiso habilitado
+            $q->orWhereHas('creator', function($userQuery) {
+                $userQuery->where('allow_view_questions_categories', true);
+            });
+        });
+        
+        // Ordenar de mayor a menor por el campo 'id'
+        $query->orderBy('id', 'desc');
+        
+        // Incluir información del creador para mostrar la propiedad
+        $query->with(['creator:id,name']);
+        
+        $categories = $query->get();
+        return response()->json($categories);
     }
 
     

@@ -30,6 +30,7 @@ class User extends Authenticatable
         'rol',
         'document_type',
         'document_number',
+        'allow_view_questions_categories',
     ];
 
     /**
@@ -52,6 +53,7 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'allow_view_questions_categories' => 'boolean',
         ];
     }
 }

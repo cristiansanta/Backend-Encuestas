@@ -40,6 +40,7 @@ class UserController extends Controller
             'password' => 'required|string|min:8|confirmed', // Confirmed necesita un 'password_confirmation' en la solicitud
             'document_type' => 'nullable|in:cedula_ciudadania,tarjeta_identidad,cedula_extranjeria,pep,permiso_proteccion_temporal',
             'document_number' => 'nullable|string|max:50',
+            'allow_view_questions_categories' => 'nullable|boolean',
         ], [
             'name.required' => 'El nombre es obligatorio.',
             'email.unique' => 'Este correo electrónico ya está registrado.',
@@ -69,6 +70,7 @@ class UserController extends Controller
                 'active' => true, // Por defecto activo
                 'document_type' => $request->document_type,
                 'document_number' => $request->document_number,
+                'allow_view_questions_categories' => $request->allow_view_questions_categories ?? false,
             ]);
     
             return response()->json(['user' => $user, 'message' => 'Usuario creado exitosamente'], 201);
@@ -121,6 +123,10 @@ class UserController extends Controller
         
         if ($request->has('document_number')) {
             $rules['document_number'] = 'nullable|string|max:50';
+        }
+        
+        if ($request->has('allow_view_questions_categories')) {
+            $rules['allow_view_questions_categories'] = 'nullable|boolean';
         }
         
         // Validación personalizada para el nombre
@@ -185,6 +191,11 @@ class UserController extends Controller
 
             if ($request->has('phone_number')) {
                 $user->phone_number = $request->input('phone_number') ?: null;
+            }
+
+            // Actualizar campos de permisos de visibilidad
+            if ($request->has('allow_view_questions_categories')) {
+                $user->allow_view_questions_categories = $request->input('allow_view_questions_categories') ?? false;
             }
 
             // Guardar los cambios

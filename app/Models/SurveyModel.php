@@ -63,6 +63,12 @@ class SurveyModel extends Model
         return $this->hasMany(NotificationSurvaysModel::class, 'id_survey');
     }
 
+    // Relación belongsTo con User (creador de la encuesta) usando el campo user_create
+    public function creator()
+    {
+        return $this->belongsTo(User::class, 'user_create', 'name');
+    }
+
      // Evento deleting para eliminar en cascada
      protected static function booted()
      {
