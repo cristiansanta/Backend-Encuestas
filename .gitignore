@@ -40,3 +40,6 @@ composer.lock
 # Asegúrate de no ignorar el archivo .gitignore dentro de estos directorios
 !.gitignore
 
+
+# Ignorar archivos de entorno específicos
+.env.docker

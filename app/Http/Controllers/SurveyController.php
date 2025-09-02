@@ -543,6 +543,34 @@ class SurveyController extends Controller
                 'question.options'
             ])->get();
             
+            // Obtener secciones de la encuesta
+            $allSections = collect([]);
+            try {
+                // 1. Secciones específicas de la encuesta
+                $surveySections = \DB::table('sections')
+                    ->where('id_survey', $id)
+                    ->get();
+                
+                // 2. Secciones del banco que están siendo usadas por preguntas de esta encuesta
+                $bankSectionIds = $allQuestions->pluck('section_id')->filter()->unique()->values();
+                if ($bankSectionIds->isNotEmpty()) {
+                    $bankSections = \DB::table('sections')
+                        ->whereIn('id', $bankSectionIds)
+                        ->whereNull('id_survey') // Secciones del banco global
+                        ->get();
+                } else {
+                    $bankSections = collect([]);
+                }
+                
+                // Combinar secciones específicas y del banco
+                $allSections = $surveySections->concat($bankSections);
+                
+                \Log::info("getSurveyQuestionsop for survey {$id}: Found {$surveySections->count()} survey-specific sections and {$bankSections->count()} bank sections");
+            } catch (\Exception $e) {
+                \Log::warning("Failed to get sections for survey {$id}: " . $e->getMessage());
+                $allSections = collect([]);
+            }
+            
             \Log::info("getSurveyQuestionsop for survey {$id}: Total questions from pivot table: {$allQuestions->count()}");
             
             // Debug: mostrar si hay preguntas hijas
@@ -554,10 +582,11 @@ class SurveyController extends Controller
                 return $sq->question && $sq->question->cod_padre == 0;
             })->count();
             
-            \Log::info("getSurveyQuestionsop breakdown: Parent questions: {$parentQuestionsCount}, Child questions: {$childQuestionsCount}");
+            \Log::info("getSurveyQuestionsop breakdown: Parent questions: {$parentQuestionsCount}, Child questions: {$childQuestionsCount}, Sections: {$allSections->count()}");
             
             return response()->json([
                 'survey_questions' => $allQuestions,
+                'sections' => $allSections,
                 'survey_info' => [
                     'id' => $survey->id,
                     'title' => $survey->title,
@@ -566,7 +595,8 @@ class SurveyController extends Controller
                 'debug_info' => [
                     'parent_questions_count' => $parentQuestionsCount,
                     'child_questions_count' => $childQuestionsCount,
-                    'total_questions_count' => $allQuestions->count()
+                    'total_questions_count' => $allQuestions->count(),
+                    'sections_count' => $allSections->count()
                 ]
             ]);
         } else {
