@@ -90,6 +90,7 @@ public function store(Request $request)
         'options.*' => 'string|max:255', // Validar cada opción
         'character_limit' => 'nullable|integer|min:1|max:250', // Límite de caracteres para preguntas abiertas
         'survey_id' => 'nullable|integer', // Añadido para asociar preguntas padre con encuestas
+        'imported_from_bank' => 'nullable|boolean', // Para omitir validación de duplicados en preguntas importadas
     ]);
 
     if ($validator->fails()) {
@@ -158,24 +159,36 @@ public function store(Request $request)
     }
 
     // MEJORADO: Verificar si ya existe un registro similar para este usuario
-    // CORREGIDO: Para preguntas hijas, incluir cod_padre en la detección de duplicados
-    // Para preguntas padre (cod_padre = 0), mantener la lógica original
-    $duplicateQuery = QuestionModel::where('title', $data['title'])
-                                  ->where('descrip', $data['descrip'])
-                                  ->where('type_questions_id', $data['type_questions_id'])
-                                  ->where('creator_id', $user->id);
+    // NUEVO: Omitir validación de duplicados si la pregunta está siendo importada del banco
+    $existingQuestion = null;
     
-    // CRÍTICO: Para preguntas hijas (cod_padre > 0), incluir cod_padre en la búsqueda
-    if (isset($data['cod_padre']) && $data['cod_padre'] > 0) {
-        $duplicateQuery->where('cod_padre', $data['cod_padre']);
-        \Log::info('Child question duplicate check', [
+    // Solo aplicar validación de duplicados si NO es una pregunta importada del banco
+    if (!isset($data['imported_from_bank']) || !$data['imported_from_bank']) {
+        // CORREGIDO: Para preguntas hijas, incluir cod_padre en la detección de duplicados
+        // Para preguntas padre (cod_padre = 0), mantener la lógica original
+        $duplicateQuery = QuestionModel::where('title', $data['title'])
+                                      ->where('descrip', $data['descrip'])
+                                      ->where('type_questions_id', $data['type_questions_id'])
+                                      ->where('creator_id', $user->id);
+        
+        // CRÍTICO: Para preguntas hijas (cod_padre > 0), incluir cod_padre en la búsqueda
+        if (isset($data['cod_padre']) && $data['cod_padre'] > 0) {
+            $duplicateQuery->where('cod_padre', $data['cod_padre']);
+            \Log::info('Child question duplicate check', [
+                'title' => $data['title'],
+                'cod_padre' => $data['cod_padre'],
+                'user_id' => $user->id
+            ]);
+        }
+        
+        $existingQuestion = $duplicateQuery->first();
+    } else {
+        \Log::info('Question imported from bank - skipping duplicate validation', [
             'title' => $data['title'],
-            'cod_padre' => $data['cod_padre'],
-            'user_id' => $user->id
+            'user_id' => $user->id,
+            'imported_from_bank' => true
         ]);
     }
-    
-    $existingQuestion = $duplicateQuery->first();
     
     // NUEVO: SIEMPRE buscar una pregunta existente para actualizar - NUNCA crear nuevas
     $questionToUpdate = null;
