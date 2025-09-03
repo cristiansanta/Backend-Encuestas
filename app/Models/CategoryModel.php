@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use App\Models\SurveyModel;
+use App\Models\User;
 class CategoryModel extends Model
 {
     use HasFactory;
@@ -19,5 +20,11 @@ class CategoryModel extends Model
     public function surveys()
     {
         return $this->hasMany(SurveyModel::class, 'id_category');
+    }
+
+    // Relación belongsTo con User (creador de la categoría) usando el campo user_create
+    public function creator()
+    {
+        return $this->belongsTo(User::class, 'user_create', 'name');
     }
 }
