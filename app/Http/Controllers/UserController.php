@@ -36,7 +36,7 @@ class UserController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
-            'phone_number' => 'nullable|string|max:10',
+            'phone_number' => 'nullable|string|min:10|max:10',
             'password' => 'required|string|min:8|confirmed', // Confirmed necesita un 'password_confirmation' en la solicitud
             'document_type' => 'nullable|in:cedula_ciudadania,tarjeta_identidad,cedula_extranjeria,pep,permiso_proteccion_temporal',
             'document_number' => 'nullable|string|max:50',
@@ -116,7 +116,7 @@ class UserController extends Controller
         }
         
         if ($request->has('phone_number')) {
-            $rules['phone_number'] = 'nullable|string|max:10';
+            $rules['phone_number'] = 'nullable|string|min:10|max:10';
         }
         
         if ($request->has('document_type')) {
