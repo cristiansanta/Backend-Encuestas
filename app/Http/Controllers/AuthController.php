@@ -79,6 +79,8 @@ class AuthController extends Controller
                         'email' => $user->email,
                         'active' => $user->active,
                         'rol' => $user->rol,
+                        'allow_view_questions_categories' => $user->allow_view_questions_categories ?? false,
+                        'allow_view_other_users_groups' => $user->allow_view_other_users_groups ?? false,
                         'roles' => $user->roles->map(function($role) {
                             return [
                                 'id' => $role->id,
@@ -110,20 +112,27 @@ class AuthController extends Controller
 
     public function logout(Request $request)
     {
-        
         $user = $request->user();
         if (!$user) {
             return response()->json(['message' => 'No authenticated user found'], 401);
         }
-        $tokens = $user->tokens;
-        if ($tokens->isEmpty()) {
-            return response()->json(['message' => 'No active token found for the user'], 404);
+        
+        // Solo eliminar el token específico de la sesión actual
+        $currentToken = $user->currentAccessToken();
+        if (!$currentToken) {
+            return response()->json(['message' => 'No active token found'], 404);
         }
-        $deletedCount = $tokens->each->delete()->count();
+        
+        // Eliminar únicamente el token de esta sesión específica
+        $currentToken->delete();
+        
+        // Contar tokens restantes después de eliminar el actual
+        $tokensRemaining = $user->tokens()->count();
+        
         return response()->json([
             'message' => 'Logged out successfully',
-            'tokens_revoked' => $deletedCount,
-            'tokens_remaining' => $user->tokens()->count()
+            'tokens_revoked' => 1,
+            'tokens_remaining' => $tokensRemaining
         ], 200);
     }
 
@@ -183,6 +192,8 @@ class AuthController extends Controller
                     'email' => $user->email,
                     'active' => $user->active,
                     'rol' => $user->rol,
+                    'allow_view_questions_categories' => $user->allow_view_questions_categories ?? false,
+                    'allow_view_other_users_groups' => $user->allow_view_other_users_groups ?? false,
                     'roles' => $user->roles->map(function($role) {
                         return [
                             'id' => $role->id,

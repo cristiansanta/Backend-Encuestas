@@ -31,6 +31,7 @@ class User extends Authenticatable
         'document_type',
         'document_number',
         'allow_view_questions_categories',
+        'allow_view_other_users_groups',
     ];
 
     /**
@@ -54,6 +55,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'allow_view_questions_categories' => 'boolean',
+            'allow_view_other_users_groups' => 'boolean',
         ];
     }
 }
