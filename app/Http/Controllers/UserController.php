@@ -36,11 +36,12 @@ class UserController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
-            'phone_number' => 'nullable|string|max:10',
+            'phone_number' => 'nullable|string|min:10|max:10',
             'password' => 'required|string|min:8|confirmed', // Confirmed necesita un 'password_confirmation' en la solicitud
             'document_type' => 'nullable|in:cedula_ciudadania,tarjeta_identidad,cedula_extranjeria,pep,permiso_proteccion_temporal',
             'document_number' => 'nullable|string|max:50',
             'allow_view_questions_categories' => 'nullable|boolean',
+            'allow_view_other_users_groups' => 'nullable|boolean',
         ], [
             'name.required' => 'El nombre es obligatorio.',
             'email.unique' => 'Este correo electrónico ya está registrado.',
@@ -71,6 +72,7 @@ class UserController extends Controller
                 'document_type' => $request->document_type,
                 'document_number' => $request->document_number,
                 'allow_view_questions_categories' => $request->allow_view_questions_categories ?? false,
+                'allow_view_other_users_groups' => $request->allow_view_other_users_groups ?? false,
             ]);
     
             return response()->json(['user' => $user, 'message' => 'Usuario creado exitosamente'], 201);
@@ -114,7 +116,7 @@ class UserController extends Controller
         }
         
         if ($request->has('phone_number')) {
-            $rules['phone_number'] = 'nullable|string|max:10';
+            $rules['phone_number'] = 'nullable|string|min:10|max:10';
         }
         
         if ($request->has('document_type')) {
@@ -127,6 +129,10 @@ class UserController extends Controller
         
         if ($request->has('allow_view_questions_categories')) {
             $rules['allow_view_questions_categories'] = 'nullable|boolean';
+        }
+        
+        if ($request->has('allow_view_other_users_groups')) {
+            $rules['allow_view_other_users_groups'] = 'nullable|boolean';
         }
         
         // Validación personalizada para el nombre
@@ -196,6 +202,10 @@ class UserController extends Controller
             // Actualizar campos de permisos de visibilidad
             if ($request->has('allow_view_questions_categories')) {
                 $user->allow_view_questions_categories = $request->input('allow_view_questions_categories') ?? false;
+            }
+
+            if ($request->has('allow_view_other_users_groups')) {
+                $user->allow_view_other_users_groups = $request->input('allow_view_other_users_groups') ?? false;
             }
 
             // Guardar los cambios
