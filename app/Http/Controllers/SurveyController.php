@@ -1636,6 +1636,86 @@ public function repairQuestions($id)
 }
     
     /**
+     * Obtener usuarios que no han respondido una encuesta específica
+     */
+    public function getNonRespondents($id)
+    {
+        try {
+            // Verificar que la encuesta existe
+            $survey = SurveyModel::findOrFail($id);
+
+            // Obtener todos los emails que han sido notificados de esta encuesta
+            $notifiedEmails = \DB::table('notificationsurvays')
+                ->where('id_survey', $id)
+                ->whereNotNull('email')
+                ->get()
+                ->flatMap(function($notification) {
+                    // Decodificar el JSON del campo email
+                    $emails = json_decode($notification->email, true);
+                    return is_array($emails) ? $emails : [$notification->email];
+                })
+                ->unique()
+                ->values();
+
+            // Obtener emails que ya respondieron
+            $respondedEmails = \DB::table('notificationsurvays')
+                ->where('id_survey', $id)
+                ->where('state_results', '1') // Usando varchar '1' como el código actual
+                ->whereNotNull('email')
+                ->get()
+                ->flatMap(function($notification) {
+                    $emails = json_decode($notification->email, true);
+                    return is_array($emails) ? $emails : [$notification->email];
+                })
+                ->unique()
+                ->values();
+
+            // Calcular usuarios que no han respondido
+            $nonRespondentEmails = $notifiedEmails->diff($respondedEmails);
+
+            // Formatear la respuesta con información adicional de usuarios
+            $nonRespondents = $nonRespondentEmails->map(function($email) use ($id) {
+                // Buscar información adicional del usuario en notificationsurvays
+                $notification = \DB::table('notificationsurvays')
+                    ->where('id_survey', $id)
+                    ->whereJsonContains('email', $email)
+                    ->first();
+
+                $data = $notification && $notification->data ? json_decode($notification->data, true) : [];
+
+                return [
+                    'email' => $email,
+                    'name' => $notification->respondent_name ?? $data['respondent_name'] ?? null,
+                    'sent_at' => $notification->date_insert ?? null,
+                    'notification_id' => $notification->id ?? null
+                ];
+            })->values();
+
+            return response()->json([
+                'success' => true,
+                'survey_id' => $id,
+                'survey_title' => $survey->title,
+                'total_notified' => $notifiedEmails->count(),
+                'total_responded' => $respondedEmails->count(),
+                'total_non_respondents' => $nonRespondents->count(),
+                'non_respondents' => $nonRespondents,
+                'response_rate' => $notifiedEmails->count() > 0
+                    ? round(($respondedEmails->count() / $notifiedEmails->count()) * 100, 2)
+                    : 0
+            ], 200);
+
+        } catch (\Exception $e) {
+            \Log::error("Error getting non-respondents for survey {$id}: " . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener usuarios que no han respondido',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * Obtener la extensión correcta basada en el tipo MIME
      */
     private function getImageExtension($mimeType)
@@ -1646,7 +1726,7 @@ public function repairQuestions($id)
             'jpg' => 'jpg',
             'svg+xml' => 'svg'
         ];
-        
+
         return $extensions[strtolower($mimeType)] ?? 'png';
     }
 }

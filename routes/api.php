@@ -160,6 +160,8 @@ Route::middleware(['debug.auth', 'auth:sanctum'])->group(function () {
         // nuevos endpoints para auto-reparación
         Route::get('/{id}/debug-relations', 'debugRelations')->name('surveys.debugRelations');
         Route::post('/{id}/repair-questions', 'repairQuestions')->name('surveys.repairQuestions');
+        // endpoint para obtener usuarios que no han respondido (para recordatorios automáticos)
+        Route::get('/{id}/non-respondents', 'getNonRespondents')->name('surveys.getNonRespondents');
 
 
     });
@@ -333,6 +335,9 @@ Route::middleware(['debug.auth', 'auth:sanctum'])->group(function () {
     Route::prefix('survey-email')->controller(SurveyEmailController::class)->group(function () {
         Route::post('/generate-link', 'generateSurveyLink')->name('survey.email.generate');
     });
+
+    // Endpoint para envío de recordatorios automáticos
+    Route::post('/send-reminder-email', [SurveyEmailController::class, 'sendReminder'])->name('survey.sendReminder');
 
     // Rutas para gestión de respondientes de encuestas
     Route::prefix('survey-respondents')->controller(SurveyRespondentController::class)->group(function () {
