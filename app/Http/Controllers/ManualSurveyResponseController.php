@@ -62,11 +62,11 @@ class ManualSurveyResponseController extends Controller
                     'respondent_name' => $data['respondent_name'],
                     'type' => 'manual_response'
                 ]),
-                'state' => true,
-                'state_results' => true,
+                'state' => '1',
+                'state_results' => 'true', // Cambiar de boolean a string
                 'date_insert' => Carbon::now(),
                 'id_survey' => $data['survey_id'],
-                'email' => [$data['respondent_email']], // Array con un email
+                'email' => $data['respondent_email'], // Cambiar a string individual
                 'expired_date' => Carbon::now()->addDays(30),
                 'respondent_name' => $data['respondent_name'],
                 'response_data' => $data['responses'] // Can be either array or object, stored as JSON
@@ -108,7 +108,7 @@ class ManualSurveyResponseController extends Controller
     {
         try {
             $responses = NotificationSurvaysModel::where('id_survey', $surveyId)
-                ->where('state_results', true)
+                ->where('state_results', 'true') // Cambiar a string
                 ->whereNotNull('respondent_name')
                 ->get();
 
@@ -119,7 +119,7 @@ class ManualSurveyResponseController extends Controller
                     'id' => $response->id,
                     'survey_id' => $response->id_survey,
                     'respondent_name' => $response->respondent_name,
-                    'respondent_email' => is_array($response->email) ? $response->email[0] : $response->email,
+                    'respondent_email' => $response->email, // Ya es string ahora
                     'completed_at' => $response->date_insert,
                     'status' => 'Contestada',
                     'responses' => $response->response_data
@@ -146,7 +146,7 @@ class ManualSurveyResponseController extends Controller
     public function getAllResponses()
     {
         try {
-            $responses = NotificationSurvaysModel::where('state_results', true)
+            $responses = NotificationSurvaysModel::where('state_results', 'true') // Cambiar a string
                 ->whereNotNull('respondent_name')
                 ->with(['survey']) // Asume que hay una relación con el modelo Survey
                 ->get();
@@ -159,7 +159,7 @@ class ManualSurveyResponseController extends Controller
                     'survey_id' => $response->id_survey,
                     'survey_title' => $response->survey->title ?? 'Sin título',
                     'respondent_name' => $response->respondent_name,
-                    'respondent_email' => is_array($response->email) ? $response->email[0] : $response->email,
+                    'respondent_email' => $response->email, // Ya es string ahora
                     'completed_at' => $response->date_insert,
                     'status' => 'Contestada',
                     'responses' => $response->response_data
@@ -236,8 +236,8 @@ class ManualSurveyResponseController extends Controller
 
                     // Verificar si ya se respondió la encuesta
                     $notification = NotificationSurvaysModel::where('id_survey', $surveyId)
-                        ->whereJsonContains('email', $tokenData['email'])
-                        ->where('state_results', true)
+                        ->where('email', $tokenData['email']) // Cambiar a búsqueda directa
+                        ->where('state_results', 'true') // Cambiar a string
                         ->whereNotNull('response_data')
                         ->first();
 
@@ -350,42 +350,25 @@ class ManualSurveyResponseController extends Controller
                 }
             }
 
-            // Verificar que no exista ya una respuesta para esta combinación
-            $existingResponse = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
-                ->whereJsonContains('email', $data['respondent_email'])
-                ->where('state_results', true)
-                ->whereNotNull('response_data')
-                ->first();
+            // PERMITIR REENVÍOS: Eliminar verificación de duplicados para permitir múltiples respuestas
 
-            if ($existingResponse) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Ya existe una respuesta para esta encuesta y email',
-                    'already_responded' => true
-                ], 409);
-            }
-
-            // Crear o actualizar registro en notificationsurvays
-            $notification = NotificationSurvaysModel::updateOrCreate(
-                [
-                    'id_survey' => $data['survey_id'],
-                    'email' => json_encode([$data['respondent_email']])
-                ],
-                [
-                    'data' => json_encode([
-                        'survey_id' => $data['survey_id'],
-                        'respondent_name' => $data['respondent_name'],
-                        'type' => !empty($data['token']) ? 'email_survey_response' : 'manual_response',
-                        'submitted_at' => Carbon::now()
-                    ]),
-                    'state' => 'completed',
-                    'state_results' => true,
-                    'date_insert' => Carbon::now(),
-                    'expired_date' => Carbon::now()->addDays(30),
+            // PERMITIR REENVÍOS: Crear nuevo registro siempre
+            $notification = NotificationSurvaysModel::create([
+                'data' => json_encode([
+                    'survey_id' => $data['survey_id'],
                     'respondent_name' => $data['respondent_name'],
-                    'response_data' => $data['responses']
-                ]
-            );
+                    'type' => !empty($data['token']) ? 'email_survey_response' : 'manual_response',
+                    'submitted_at' => Carbon::now()
+                ]),
+                'state' => 'completed',
+                'state_results' => 'true',
+                'date_insert' => Carbon::now(),
+                'id_survey' => $data['survey_id'],
+                'email' => $data['respondent_email'],
+                'expired_date' => Carbon::now()->addDays(30),
+                'respondent_name' => $data['respondent_name'],
+                'response_data' => $data['responses']
+            ]);
 
             return response()->json([
                 'success' => true,

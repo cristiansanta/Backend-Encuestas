@@ -1678,7 +1678,7 @@ public function repairQuestions($id)
                 // Buscar información adicional del usuario en notificationsurvays
                 $notification = \DB::table('notificationsurvays')
                     ->where('id_survey', $id)
-                    ->whereJsonContains('email', $email)
+                    ->where('email', $email) // Cambiar a búsqueda directa de string
                     ->first();
 
                 $data = $notification && $notification->data ? json_decode($notification->data, true) : [];
