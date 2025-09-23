@@ -66,7 +66,7 @@ class ManualSurveyResponseController extends Controller
                 'state_results' => 'true', // Cambiar de boolean a string
                 'date_insert' => Carbon::now(),
                 'id_survey' => $data['survey_id'],
-                'email' => $data['respondent_email'], // Cambiar a string individual
+                'destinatario' => $data['respondent_email'], // Usar nuevo campo destinatario
                 'expired_date' => Carbon::now()->addDays(30),
                 'respondent_name' => $data['respondent_name'],
                 'response_data' => $data['responses'] // Can be either array or object, stored as JSON
@@ -119,7 +119,7 @@ class ManualSurveyResponseController extends Controller
                     'id' => $response->id,
                     'survey_id' => $response->id_survey,
                     'respondent_name' => $response->respondent_name,
-                    'respondent_email' => $response->email, // Ya es string ahora
+                    'respondent_email' => $response->destinatario, // Usar nuevo campo destinatario
                     'completed_at' => $response->date_insert,
                     'status' => 'Contestada',
                     'responses' => $response->response_data
@@ -159,7 +159,7 @@ class ManualSurveyResponseController extends Controller
                     'survey_id' => $response->id_survey,
                     'survey_title' => $response->survey->title ?? 'Sin título',
                     'respondent_name' => $response->respondent_name,
-                    'respondent_email' => $response->email, // Ya es string ahora
+                    'respondent_email' => $response->destinatario, // Usar nuevo campo destinatario
                     'completed_at' => $response->date_insert,
                     'status' => 'Contestada',
                     'responses' => $response->response_data
@@ -236,7 +236,7 @@ class ManualSurveyResponseController extends Controller
 
                     // Verificar si ya se respondió la encuesta
                     $notification = NotificationSurvaysModel::where('id_survey', $surveyId)
-                        ->where('email', $tokenData['email']) // Cambiar a búsqueda directa
+                        ->where('destinatario', $tokenData['email']) // Usar nuevo campo destinatario
                         ->where('state_results', 'true') // Cambiar a string
                         ->whereNotNull('response_data')
                         ->first();
@@ -364,7 +364,7 @@ class ManualSurveyResponseController extends Controller
                 'state_results' => 'true',
                 'date_insert' => Carbon::now(),
                 'id_survey' => $data['survey_id'],
-                'email' => $data['respondent_email'],
+                'destinatario' => $data['respondent_email'],
                 'expired_date' => Carbon::now()->addDays(30),
                 'respondent_name' => $data['respondent_name'],
                 'response_data' => $data['responses']

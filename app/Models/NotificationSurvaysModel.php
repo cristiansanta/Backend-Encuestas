@@ -26,7 +26,14 @@ class NotificationSurvaysModel extends Model
         'scheduled_sending',
         'scheduled_date',
         'send_immediately',
-        'scheduled_at' // Nuevo campo para fecha/hora programada
+        'scheduled_at', // Nuevo campo para fecha/hora programada
+        'created_at', // Timestamp de creación
+        'updated_at', // Timestamp de actualización
+        'sent_at', // Timestamp de envío
+        'estado', // Estado del envío (pending, sent, delivered, failed, bounced)
+        'retry_count', // Contador de reintentos
+        'last_error', // Último error
+        'next_retry_at' // Próximo reintento
     ];
 
     protected $casts = [
@@ -38,6 +45,13 @@ class NotificationSurvaysModel extends Model
         'date_insert' => 'datetime', // Cast date_insert como datetime
         'expired_date' => 'datetime', // Cast expired_date como datetime
         'scheduled_at' => 'datetime', // Cast scheduled_at como datetime
+        'created_at' => 'datetime', // Cast created_at como datetime
+        'updated_at' => 'datetime', // Cast updated_at como datetime
+        'sent_at' => 'datetime', // Cast sent_at como datetime
+        'next_retry_at' => 'datetime', // Cast next_retry_at como datetime
+        'estado' => 'string', // Cast estado como string (enum)
+        'retry_count' => 'integer', // Cast retry_count como integer
+        'last_error' => 'string', // Cast last_error como string
         'state_results' => 'string', // Cast state_results como string (no boolean)
         'scheduled_sending' => 'boolean', // Cast para envío programado
         'scheduled_date' => 'datetime', // Cast para fecha programada

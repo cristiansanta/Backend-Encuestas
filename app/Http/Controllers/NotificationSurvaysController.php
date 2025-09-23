@@ -434,7 +434,7 @@ class NotificationSurvaysController extends Controller
 
             foreach ($notifications as $notification) {
                 $isExpired = $notification->expired_date && Carbon::now()->isAfter($notification->expired_date);
-                $hasResponded = $notification->state_results && !empty($notification->response_data);
+                $hasResponded = $notification->state_results === 'true' && !empty($notification->response_data);
                 
                 if ($isExpired) {
                     $statusSummary['expired_links']++;
@@ -446,7 +446,7 @@ class NotificationSurvaysController extends Controller
 
                 $statusSummary['notifications'][] = [
                     'id' => $notification->id,
-                    'emails' => $notification->email,
+                    'emails' => $notification->destinatario,
                     'respondent_name' => $notification->respondent_name,
                     'has_responded' => $hasResponded,
                     'is_expired' => $isExpired,
