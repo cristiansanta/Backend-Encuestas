@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\NotificationSurvaysModel;
 use App\Models\SurveyModel;
+use App\Models\SurveyRespondentModel;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Crypt;
 use Carbon\Carbon;
@@ -84,11 +85,43 @@ class SurveyEmailController extends Controller
     }
 
     /**
+     * Extrae un nombre aproximado del correo electrónico
+     */
+    private function extractNameFromEmail($email)
+    {
+        // Extraer la parte antes del @
+        $namePart = explode('@', $email)[0];
+
+        // Reemplazar puntos, guiones y números con espacios
+        $namePart = preg_replace('/[._-]/', ' ', $namePart);
+        $namePart = preg_replace('/\d+/', '', $namePart);
+
+        // Capitalizar cada palabra
+        $name = ucwords(trim($namePart));
+
+        // Si queda muy corto o vacío, usar el correo completo
+        if (strlen($name) < 2) {
+            return $email;
+        }
+
+        return $name;
+    }
+
+    /**
      * Genera un enlace de encuesta con JWT para acceso por correo
      */
     public function generateSurveyLink(Request $request)
     {
         try {
+            // LOGGING CRÍTICO: Identificar quién está llamando este método
+            \Log::emergency('🚨 generateSurveyLink LLAMADO - STACK TRACE:', [
+                'request_data' => $request->all(),
+                'user_agent' => $request->userAgent(),
+                'ip' => $request->ip(),
+                'referer' => $request->header('referer'),
+                'stack_trace' => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 10)
+            ]);
+
             $validator = Validator::make($request->all(), [
                 'survey_id' => 'required|integer|exists:surveys,id',
                 'email' => 'required|email',
@@ -128,27 +161,87 @@ class SurveyEmailController extends Controller
             // Cifrar el token con Laravel Crypt
             $encryptedToken = Crypt::encrypt($tokenData);
 
-            // Crear o actualizar el registro de notificación
-            $notification = NotificationSurvaysModel::updateOrCreate(
-                [
-                    'id_survey' => $data['survey_id'],
-                    'email' => json_encode([$data['email']])
-                ],
-                [
+            // Log debug para identificar problemas de tipos de datos
+            \Log::info('🔍 SurveyEmailController - Datos que se van a insertar:', [
+                'survey_id' => $data['survey_id'],
+                'survey_id_type' => gettype($data['survey_id']),
+                'email' => $data['email'],
+                'email_type' => gettype($data['email']),
+                'respondent_name' => $data['respondent_name'] ?? 'null',
+                'respondent_name_type' => gettype($data['respondent_name']),
+                'survey_end_date' => $survey->end_date,
+                'survey_end_date_type' => gettype($survey->end_date),
+                'current_datetime' => Carbon::now(),
+                'addDays_result' => Carbon::now()->addDays(30)
+            ]);
+
+            // BUSCAR NOTIFICACIÓN EXISTENTE en lugar de crear nueva
+            // Esto evita duplicados del flujo AsignationMigrate -> Notification/store
+            $notification = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
+                ->where('destinatario', $data['email']) // Usar nuevo campo destinatario
+                ->orderBy('date_insert', 'desc')
+                ->first();
+
+            \Log::emergency('🔍 generateSurveyLink - BÚSQUEDA DE NOTIFICACIÓN:', [
+                'survey_id' => $data['survey_id'],
+                'email' => $data['email'],
+                'notification_found' => $notification ? true : false,
+                'notification_id' => $notification ? $notification->id : null,
+                'notification_state' => $notification ? $notification->state : null
+            ]);
+
+            // Si no existe notificación, crear una nueva (caso directo de generación de link)
+            if (!$notification) {
+                \Log::emergency('⚠️ generateSurveyLink - CREANDO NUEVA NOTIFICACIÓN porque no se encontró existente');
+            } else {
+                \Log::emergency('✅ generateSurveyLink - USANDO NOTIFICACIÓN EXISTENTE:', [
+                    'existing_id' => $notification->id,
+                    'existing_state' => $notification->state
+                ]);
+            }
+
+            // Si no existe notificación, crear una nueva (caso directo de generación de link)
+            if (!$notification) {
+                $notification = NotificationSurvaysModel::create([
                     'data' => json_encode([
-                        'survey_id' => $data['survey_id'],
-                        'respondent_name' => $data['respondent_name'],
+                        'survey_id' => (int)$data['survey_id'],
+                        'respondent_name' => $data['respondent_name'] ?? null,
                         'type' => 'email_survey_access',
-                        'token_issued_at' => Carbon::now(),
+                        'token_issued_at' => Carbon::now()->toISOString(),
                         'unique_token' => $tokenData['unique_id']
                     ]),
                     'state' => 'sent',
-                    'state_results' => false,
+                    'state_results' => 'false',
                     'date_insert' => Carbon::now(),
-                    'expired_date' => $survey->end_date ?? Carbon::now()->addDays(30),
-                    'respondent_name' => $data['respondent_name']
-                ]
-            );
+                    'id_survey' => (int)$data['survey_id'],
+                    'destinatario' => (string)$data['email'], // Usar nuevo campo destinatario
+                    'asunto' => 'Enlace de Acceso a Encuesta', // Agregar asunto
+                    'body' => '', // Body vacío para este caso
+                    'expired_date' => $survey->end_date ? Carbon::parse($survey->end_date) : Carbon::now()->addDays(30),
+                    'respondent_name' => $data['respondent_name'] ?? null,
+                    'scheduled_at' => Carbon::now() // Envío inmediato
+                ]);
+
+                // SINCRONIZAR: Crear registro en survey_respondents solo si no existe notificación previa
+                $existingRespondent = SurveyRespondentModel::where('survey_id', $data['survey_id'])
+                    ->where('respondent_email', $data['email'])
+                    ->first();
+
+                if (!$existingRespondent) {
+                    // Crear token único para el correo
+                    $emailToken = Str::random(64);
+
+                    SurveyRespondentModel::create([
+                        'survey_id' => $data['survey_id'],
+                        'respondent_name' => $data['respondent_name'] ?? $this->extractNameFromEmail($data['email']),
+                        'respondent_email' => $data['email'],
+                        'status' => 'Enviada',
+                        'sent_at' => now(),
+                        'notification_id' => $notification->id,
+                        'email_token' => $emailToken
+                    ]);
+                }
+            }
 
             // Generar la URL de la encuesta
             $surveyUrl = config('app.frontend_url', 'http://localhost:3000') .
@@ -363,8 +456,8 @@ class SurveyEmailController extends Controller
 
             // 4. ERRORES DE SESIÓN - Verificar si ya se respondió la encuesta
             $notification = NotificationSurvaysModel::where('id_survey', $surveyId)
-                ->whereJsonContains('email', $tokenData['email'])
-                ->where('state_results', true)
+                ->where('destinatario', $tokenData['email']) // Usar nuevo campo destinatario
+                ->where('state_results', 'true') // Cambiar a string
                 ->whereNotNull('response_data')
                 ->first();
 
@@ -496,31 +589,30 @@ class SurveyEmailController extends Controller
 
             // Usar transacción para asegurar consistencia entre tablas
             \DB::transaction(function() use ($surveyId, $tokenData, $respondentName, $responses) {
-                // Crear o actualizar el registro de notificación con la respuesta
-                $notification = NotificationSurvaysModel::updateOrCreate(
-                    [
-                        'id_survey' => $surveyId,
-                        'email' => json_encode([$tokenData['email']])
-                    ],
-                    [
-                        'data' => json_encode([
-                            'survey_id' => $surveyId,
-                            'respondent_name' => $respondentName ?? $tokenData['respondent_name'],
-                            'type' => 'email_survey_response',
-                            'submitted_at' => Carbon::now(),
-                            'unique_token' => $tokenData['unique_id']
-                        ]),
-                        'state' => 'completed',
-                        'state_results' => true,
-                        'date_insert' => Carbon::now(),
-                        'expired_date' => Carbon::createFromTimestamp($tokenData['expires_at']),
+                // PERMITIR REENVÍOS: Crear nuevo registro siempre
+                $notification = NotificationSurvaysModel::create([
+                    'data' => json_encode([
+                        'survey_id' => $surveyId,
                         'respondent_name' => $respondentName ?? $tokenData['respondent_name'],
-                        'response_data' => $responses
-                    ]
-                );
+                        'type' => 'email_survey_response',
+                        'submitted_at' => Carbon::now(),
+                        'unique_token' => $tokenData['unique_id']
+                    ]),
+                    'state' => 'completed',
+                    'state_results' => 'true',
+                    'date_insert' => Carbon::now(),
+                    'id_survey' => $surveyId,
+                    'destinatario' => $tokenData['email'],
+                    'asunto' => 'Respuesta de Encuesta',
+                    'body' => '', // Body vacío para respuestas
+                    'expired_date' => Carbon::createFromTimestamp($tokenData['expires_at']),
+                    'respondent_name' => $respondentName ?? $tokenData['respondent_name'],
+                    'response_data' => $responses,
+                    'scheduled_at' => Carbon::now()
+                ]);
 
                 // CRÍTICO: Sincronizar con survey_respondents
-                \App\Models\SurveyRespondentModel::where('survey_id', $surveyId)
+                SurveyRespondentModel::where('survey_id', $surveyId)
                     ->where('respondent_email', $tokenData['email'])
                     ->update([
                         'status' => 'Contestada',
@@ -578,7 +670,7 @@ class SurveyEmailController extends Controller
             $email = $request->input('email');
 
             $notification = NotificationSurvaysModel::where('id_survey', $surveyId)
-                ->whereJsonContains('email', $email)
+                ->where('destinatario', $email) // Usar nuevo campo destinatario
                 ->first();
 
             if (!$notification) {
@@ -594,10 +686,10 @@ class SurveyEmailController extends Controller
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'has_responded' => (bool) $notification->state_results && !empty($notification->response_data),
+                    'has_responded' => $notification->state_results === 'true' && !empty($notification->response_data), // Cambiar lógica para string
                     'is_expired' => $isExpired,
                     'survey_status' => $survey ? $survey->status : false,
-                    'response_date' => $notification->state_results ? $notification->date_insert : null,
+                    'response_date' => $notification->state_results === 'true' ? $notification->date_insert : null, // Cambiar lógica para string
                     'respondent_name' => $notification->respondent_name
                 ]
             ], 200);
@@ -663,8 +755,8 @@ class SurveyEmailController extends Controller
 
             // Verificar si el usuario ya respondió la encuesta
             $hasResponded = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
-                ->whereJsonContains('email', $data['to'])
-                ->where('state_results', true)
+                ->where('destinatario', $data['to']) // Usar nuevo campo destinatario
+                ->where('state_results', 'true') // Cambiar a string
                 ->exists();
 
             if ($hasResponded) {
@@ -716,8 +808,6 @@ class SurveyEmailController extends Controller
 
             // Registrar el envío del recordatorio
             NotificationSurvaysModel::create([
-                'id_survey' => $data['survey_id'],
-                'email' => json_encode([$data['to']]),
                 'data' => json_encode([
                     'type' => 'reminder',
                     'days_remaining' => $data['days_remaining'],
@@ -725,9 +815,14 @@ class SurveyEmailController extends Controller
                     'survey_title' => $survey->title
                 ]),
                 'state' => 'sent_reminder',
-                'state_results' => false,
+                'state_results' => 'false',
                 'date_insert' => Carbon::now(),
-                'expired_date' => $survey->end_date
+                'id_survey' => $data['survey_id'],
+                'destinatario' => $data['to'],
+                'asunto' => $data['subject'],
+                'body' => $data['html_body'],
+                'expired_date' => $survey->end_date,
+                'scheduled_at' => Carbon::now()
             ]);
 
             return response()->json([

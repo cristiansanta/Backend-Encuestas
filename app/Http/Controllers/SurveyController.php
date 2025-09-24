@@ -44,7 +44,7 @@ class SurveyController extends Controller
             // Contar respuestas desde la tabla notificationsurvays donde se almacenan las respuestas reales
             $count = \DB::table('notificationsurvays')
                 ->where('id_survey', $survey->id)
-                ->where('state_results', '1') // Solo contar respuestas completadas (varchar '1')
+                ->where('state_results', 'true') // Solo contar respuestas completadas (varchar 'true')
                 ->whereNotNull('respondent_name') // Asegurar que hay un encuestado válido
                 ->count();
             
@@ -1190,7 +1190,7 @@ private function updateSurveyStatusBasedOnDates($survey)
             // Contar respuestas desde la tabla notificationsurvays donde se almacenan las respuestas reales
             $count = \DB::table('notificationsurvays')
                 ->where('id_survey', $id)
-                ->where('state_results', '1') // Solo contar respuestas completadas (varchar '1')
+                ->where('state_results', 'true') // Solo contar respuestas completadas (varchar 'true')
                 ->whereNotNull('respondent_name') // Asegurar que hay un encuestado válido
                 ->count();
 
@@ -1647,12 +1647,11 @@ public function repairQuestions($id)
             // Obtener todos los emails que han sido notificados de esta encuesta
             $notifiedEmails = \DB::table('notificationsurvays')
                 ->where('id_survey', $id)
-                ->whereNotNull('email')
+                ->whereNotNull('destinatario')
                 ->get()
-                ->flatMap(function($notification) {
-                    // Decodificar el JSON del campo email
-                    $emails = json_decode($notification->email, true);
-                    return is_array($emails) ? $emails : [$notification->email];
+                ->map(function($notification) {
+                    // El campo destinatario ahora es string individual
+                    return $notification->destinatario;
                 })
                 ->unique()
                 ->values();
@@ -1660,12 +1659,12 @@ public function repairQuestions($id)
             // Obtener emails que ya respondieron
             $respondedEmails = \DB::table('notificationsurvays')
                 ->where('id_survey', $id)
-                ->where('state_results', '1') // Usando varchar '1' como el código actual
-                ->whereNotNull('email')
+                ->where('state_results', 'true') // Usando varchar 'true' como el código actual
+                ->whereNotNull('destinatario')
                 ->get()
-                ->flatMap(function($notification) {
-                    $emails = json_decode($notification->email, true);
-                    return is_array($emails) ? $emails : [$notification->email];
+                ->map(function($notification) {
+                    // El campo destinatario ahora es string individual
+                    return $notification->destinatario;
                 })
                 ->unique()
                 ->values();
@@ -1678,7 +1677,7 @@ public function repairQuestions($id)
                 // Buscar información adicional del usuario en notificationsurvays
                 $notification = \DB::table('notificationsurvays')
                     ->where('id_survey', $id)
-                    ->whereJsonContains('email', $email)
+                    ->where('destinatario', $email) // Usar nuevo campo destinatario
                     ->first();
 
                 $data = $notification && $notification->data ? json_decode($notification->data, true) : [];
