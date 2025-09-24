@@ -49,7 +49,7 @@ class NotificationSurvaysModel extends Model
         'updated_at' => 'datetime', // Cast updated_at como datetime
         'sent_at' => 'datetime', // Cast sent_at como datetime
         'next_retry_at' => 'datetime', // Cast next_retry_at como datetime
-        'estado' => 'string', // Cast estado como string (enum)
+        'estado' => 'string', // Cast estado como enum env_estado ('pendiente', 'en_proceso', 'enviado', 'fallo', 'cancelado')
         'retry_count' => 'integer', // Cast retry_count como integer
         'last_error' => 'string', // Cast last_error como string
         'state_results' => 'string', // Cast state_results como string (no boolean)

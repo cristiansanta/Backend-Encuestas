@@ -7,6 +7,7 @@ use App\Models\NotificationSurvaysModel;
 use App\Models\SurveyModel;
 use App\Models\SurveyRespondentModel;
 use App\Models\GroupModel;
+use App\Models\GroupUserModel;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
@@ -77,16 +78,16 @@ class NotificationSurvaysController extends Controller
             return response()->json(['error' => "Correo inválido: {$validatedData['email']}"], 422);
         }
 
+        // BUSCAR DATOS COMPLETOS DEL USUARIO EN LA BASE DE DATOS PRIMERO
+        $userData = GroupUserModel::where('correo', $validatedData['email'])->first();
+
         // Extraer información adicional de los datos
         $data = is_string($validatedData['data']) ? json_decode($validatedData['data'], true) : $validatedData['data'];
         $groupName = $data['grupo'] ?? null;
-        $respondentName = $validatedData['respondent_name'] ?? $data['nombre'] ?? $this->extractNameFromEmail($validatedData['email']);
+        $respondentName = $validatedData['respondent_name'] ?? ($userData ? $userData->nombre : null) ?? $data['nombre'] ?? $this->extractNameFromEmail($validatedData['email']);
 
         // PERMITIR REENVÍOS: En lugar de bloquear, actualizar la notificación existente o crear una nueva
         // Esto permite enviar la misma encuesta varias veces al mismo correo
-
-        // Extraer y procesar datos del payload
-        $data = is_string($validatedData['data']) ? json_decode($validatedData['data'], true) : $validatedData['data'];
 
         // Separar información del correo de metadatos
         $asunto = $data['asunto'] ?? 'Invitación a Encuesta';
@@ -97,14 +98,14 @@ class NotificationSurvaysController extends Controller
             'survey_id' => $validatedData['id_survey'],
             'type' => 'mass_email_notification',
             'metadata' => [
-                'grupo' => $data['grupo'] ?? null,
-                'regional' => $data['regional'] ?? null,
-                'tipoDocumento' => $data['tipoDocumento'] ?? null,
-                'numeroDocumento' => $data['numeroDocumento'] ?? null,
-                'centroFormacion' => $data['centroFormacion'] ?? null,
-                'programaFormacion' => $data['programaFormacion'] ?? null,
-                'fichaGrupo' => $data['fichaGrupo'] ?? null,
-                'tipoCaracterizacion' => $data['tipoCaracterizacion'] ?? null
+                'grupo' => $data['grupo'] ?? ($userData ? $userData->group->name ?? null : null),
+                'regional' => $userData ? $userData->regional : ($data['regional'] ?? null),
+                'tipoDocumento' => $userData ? $userData->tipo_documento : null,
+                'numeroDocumento' => $userData ? $userData->numero_documento : null,
+                'centroFormacion' => $userData ? $userData->centro_formacion : null,
+                'programaFormacion' => $userData ? $userData->programa_formacion : null,
+                'fichaGrupo' => $userData ? $userData->ficha_grupo : null,
+                'tipoCaracterizacion' => $userData ? $userData->tipo_caracterizacion : null
             ],
             'scheduling' => [
                 'scheduled_sending' => $validatedData['scheduled_sending'] ?? false,
@@ -300,11 +301,14 @@ class NotificationSurvaysController extends Controller
 
             foreach ($emails as $emailData) {
                 try {
+                    // BUSCAR DATOS COMPLETOS DEL USUARIO EN LA BASE DE DATOS
+                    $userData = GroupUserModel::where('correo', $emailData['email'])->first();
+
                     // Crear un token único para esta combinación de encuesta y email
                     $tokenData = [
                         'survey_id' => $surveyId,
                         'email' => $emailData['email'],
-                        'respondent_name' => $emailData['name'] ?? null,
+                        'respondent_name' => $userData ? $userData->nombre : ($emailData['name'] ?? null),
                         'issued_at' => Carbon::now()->timestamp,
                         'expires_at' => $survey->end_date ? $survey->end_date->timestamp : Carbon::now()->addDays(30)->timestamp,
                         'unique_id' => Str::uuid()
@@ -329,8 +333,17 @@ class NotificationSurvaysController extends Controller
                     $notification = NotificationSurvaysModel::create([
                         'data' => json_encode([
                             'survey_id' => (int)$surveyId,
-                            'respondent_name' => $emailData['name'] ?? null,
                             'type' => 'mass_email_survey_access',
+                            'metadata' => [
+                                'grupo' => $userData ? ($userData->group->name ?? null) : null,
+                                'regional' => $userData ? $userData->regional : null,
+                                'tipoDocumento' => $userData ? $userData->tipo_documento : null,
+                                'numeroDocumento' => $userData ? $userData->numero_documento : null,
+                                'centroFormacion' => $userData ? $userData->centro_formacion : null,
+                                'programaFormacion' => $userData ? $userData->programa_formacion : null,
+                                'fichaGrupo' => $userData ? $userData->ficha_grupo : null,
+                                'tipoCaracterizacion' => $userData ? $userData->tipo_caracterizacion : null
+                            ],
                             'token_issued_at' => Carbon::now()->toISOString(),
                             'unique_token' => $tokenData['unique_id']
                         ]),
@@ -338,9 +351,9 @@ class NotificationSurvaysController extends Controller
                         'state_results' => 'false',
                         'date_insert' => Carbon::now(),
                         'id_survey' => (int)$surveyId,
-                        'email' => (string)$emailData['email'],
+                        'destinatario' => (string)$emailData['email'], // Usar nuevo campo destinatario
                         'expired_date' => $survey->end_date ? Carbon::parse($survey->end_date) : Carbon::now()->addDays(30),
-                        'respondent_name' => $emailData['name'] ?? null
+                        'respondent_name' => $userData ? $userData->nombre : ($emailData['name'] ?? null)
                     ]);
 
                     // SINCRONIZAR: Crear registro en survey_respondents para seguimiento
@@ -354,7 +367,7 @@ class NotificationSurvaysController extends Controller
 
                         SurveyRespondentModel::create([
                             'survey_id' => $surveyId,
-                            'respondent_name' => $emailData['name'] ?? $this->extractNameFromEmail($emailData['email']),
+                            'respondent_name' => $userData ? $userData->nombre : ($emailData['name'] ?? $this->extractNameFromEmail($emailData['email'])),
                             'respondent_email' => $emailData['email'],
                             'status' => 'Enviada',
                             'sent_at' => now(),
