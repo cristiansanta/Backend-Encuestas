@@ -109,7 +109,9 @@ class NotificationSurvaysController extends Controller
             ],
             'scheduling' => [
                 'scheduled_sending' => $validatedData['scheduled_sending'] ?? false,
-                'scheduled_date' => $validatedData['scheduled_date'] ?? null,
+                'scheduled_date' => ($validatedData['scheduled_sending'] ?? false)
+                    ? ($validatedData['scheduled_date'] ?? null)
+                    : now(), // Asignar fecha actual para envío inmediato
                 'send_immediately' => $validatedData['send_immediately'] ?? true
             ],
             'sent_at' => now()
@@ -136,7 +138,9 @@ class NotificationSurvaysController extends Controller
             'expired_date' => $validatedData['expired_date'] ?? now()->addDays(30),
             'respondent_name' => $respondentName,
             'scheduled_sending' => $validatedData['scheduled_sending'] ?? false,
-            'scheduled_date' => $validatedData['scheduled_date'] ?? null,
+            'scheduled_date' => ($validatedData['scheduled_sending'] ?? false)
+                ? ($validatedData['scheduled_date'] ?? null)
+                : now(), // Asignar fecha actual para envío inmediato
             'send_immediately' => $validatedData['send_immediately'] ?? true,
             'scheduled_at' => $scheduledAt
         ]);
