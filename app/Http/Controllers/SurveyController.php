@@ -1728,4 +1728,80 @@ public function repairQuestions($id)
 
         return $extensions[strtolower($mimeType)] ?? 'png';
     }
+
+    /**
+     * Get public survey details without authentication (for email survey responses)
+     * This is a public endpoint that allows access to survey structure without login
+     */
+    public function getPublicSurveyDetails($id)
+    {
+        try {
+            // Verificar que la encuesta existe y está activa
+            $survey = SurveyModel::with([
+                'category',
+                'surveyQuestions.question.type',
+                'surveyQuestions.question.options',
+                'surveyQuestions.question.conditions',
+                'surveyQuestions.question.parentQuestion',
+                'surveyQuestions.question.childQuestions.type',
+                'surveyQuestions.question.childQuestions.options',
+                'surveyQuestions.question.childQuestions.conditions',
+                'surveyQuestions.section'
+            ])->find($id);
+
+            if (!$survey) {
+                return response()->json(['message' => 'Survey not found'], 404);
+            }
+
+            // Verificar que la encuesta está publicada y activa
+            if (!$survey->status) {
+                return response()->json(['message' => 'Survey is not active'], 403);
+            }
+
+            // Verificar fechas de validez
+            $now = Carbon::now();
+            if ($survey->start_date && $now->isBefore($survey->start_date)) {
+                return response()->json(['message' => 'Survey has not started yet'], 403);
+            }
+
+            if ($survey->end_date && $now->isAfter($survey->end_date)) {
+                return response()->json(['message' => 'Survey has expired'], 403);
+            }
+
+            // Obtener secciones usando el método correcto
+            try {
+                $sectionsController = new SectionController();
+                $sectionsResponse = $sectionsController->getSectionsBySurvey($id);
+
+                if ($sectionsResponse->getStatusCode() === 200) {
+                    $sectionsData = json_decode($sectionsResponse->getContent(), true);
+                    if ($sectionsData && is_array($sectionsData)) {
+                        $allSections = collect($sectionsData);
+                    } else {
+                        $allSections = collect([]);
+                    }
+                } else {
+                    $allSections = collect([]);
+                }
+            } catch (\Exception $e) {
+                \Log::warning("Failed to get sections for public survey {$id}: " . $e->getMessage());
+                $allSections = collect([]);
+            }
+
+            // Asignar las secciones al survey
+            $survey->setRelation('sections', $allSections);
+
+            // Log para debug público
+            \Log::info("getPublicSurveyDetails for survey {$id} - Sections: {$survey->sections->count()}, Questions: {$survey->surveyQuestions->count()}");
+
+            return response()->json($survey, 200);
+
+        } catch (\Exception $e) {
+            \Log::error("Error in getPublicSurveyDetails for survey {$id}: " . $e->getMessage());
+            return response()->json([
+                'message' => 'Error retrieving survey details',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
 }
