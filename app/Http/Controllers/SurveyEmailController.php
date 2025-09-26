@@ -215,7 +215,7 @@ class SurveyEmailController extends Controller
                     'date_insert' => Carbon::now(),
                     'id_survey' => (int)$data['survey_id'],
                     'destinatario' => (string)$data['email'], // Usar nuevo campo destinatario
-                    'asunto' => 'Enlace de Acceso a Encuesta', // Agregar asunto
+                    'asunto' => 'Encuesta ' . $survey->title, // Agregar asunto con nombre de la encuesta
                     'body' => '', // Body vacío para este caso
                     'expired_date' => $survey->end_date ? Carbon::parse($survey->end_date) : Carbon::now()->addDays(30),
                     'respondent_name' => $data['respondent_name'] ?? null,
