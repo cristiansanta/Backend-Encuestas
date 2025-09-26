@@ -62,9 +62,12 @@ return [
     | This URL is used to generate survey links that point to the frontend
     | application. This should be set to the URL where your frontend is hosted.
     |
+    | Development: http://localhost:5173
+    | Production: http://149.130.180.163:5173
+    |
     */
 
-    'frontend_url' => env('FRONTEND_URL', 'http://localhost:3000'),
+    'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
 
     /*
     |--------------------------------------------------------------------------
