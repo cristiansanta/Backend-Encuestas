@@ -382,7 +382,7 @@ class NotificationSurvaysController extends Controller
 
                     // Generar la URL de la encuesta
                     $surveyUrl = config('app.frontend_url', 'http://localhost:3000') .
-                                '/survey-view-manual/' . $surveyId .
+                                '/encuestados/survey-view-manual/' . $surveyId .
                                 '?token=' . urlencode($encryptedToken);
 
                     $generatedLinks[] = [

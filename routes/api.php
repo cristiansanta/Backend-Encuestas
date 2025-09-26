@@ -71,6 +71,13 @@ Route::prefix('manual-survey')->controller(ManualSurveyResponseController::class
     Route::post('/submit-with-token', 'storeWithTokenValidation')->name('manual.survey.submit.token');
 });
 
+// Ruta pública para obtener detalles de encuesta sin autenticación (para respuestas por email)
+Route::get('surveys/{id}/public-details', [SurveyController::class, 'getPublicSurveyDetails'])->name('surveys.public.details');
+
+// Rutas públicas para envío de respuestas sin autenticación
+Route::post('public/survey-responses', [ManualSurveyResponseController::class, 'store'])->name('public.survey.responses.store');
+Route::post('public/manual-survey-responses', [ManualSurveyResponseController::class, 'store'])->name('public.manual.survey.responses.store');
+
 
 // Temporary test without auth - DISABLED for security
 // Route::get('/surveys/', [SurveyController::class, 'index'])->name('surveys.index.test');
