@@ -45,7 +45,7 @@ class ManualSurveyResponseController extends Controller
                     'errors' => $validator->errors(),
                     'input_data' => $request->all()
                 ]);
-                
+
                 return response()->json([
                     'success' => false,
                     'message' => 'Datos de validación incorrectos',
@@ -54,6 +54,40 @@ class ManualSurveyResponseController extends Controller
             }
 
             $data = $validator->validated();
+
+            // CRÍTICO: Validar que la encuesta existe y no esté vencida
+            $survey = SurveyModel::find($data['survey_id']);
+            if (!$survey) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La encuesta no existe'
+                ], 404);
+            }
+
+            // Verificar si la encuesta está activa
+            if (!$survey->status) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La encuesta no está activa'
+                ], 403);
+            }
+
+            // Verificar fechas de la encuesta
+            $now = Carbon::now();
+            if ($survey->start_date && $now->isBefore($survey->start_date)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La encuesta aún no ha comenzado'
+                ], 403);
+            }
+
+            if ($survey->end_date && $now->isAfter($survey->end_date)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La encuesta ha finalizado',
+                    'expired' => true
+                ], 403);
+            }
 
             // Crear registro en notificationsurvays para el seguimiento
             $notification = NotificationSurvaysModel::create([
@@ -347,6 +381,31 @@ class ManualSurveyResponseController extends Controller
                 $accessValidation = $this->validateEmailSurveyAccess($request);
                 if ($accessValidation->getStatusCode() !== 200) {
                     return $accessValidation;
+                }
+
+                // CRÍTICO: Validar que el email del formulario coincida con el del token
+                try {
+                    $tokenData = Crypt::decrypt($data['token']);
+                    if ($tokenData['email'] !== $data['respondent_email']) {
+                        \Log::warning('🚨 INTENTO DE SUPLANTACIÓN DETECTADO:', [
+                            'token_email' => $tokenData['email'],
+                            'submitted_email' => $data['respondent_email'],
+                            'survey_id' => $data['survey_id'],
+                            'ip' => request()->ip(),
+                            'user_agent' => request()->userAgent()
+                        ]);
+
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'Email no autorizado para este enlace de encuesta',
+                            'unauthorized' => true
+                        ], 403);
+                    }
+                } catch (\Exception $e) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Token inválido o corrupto'
+                    ], 401);
                 }
             }
 
