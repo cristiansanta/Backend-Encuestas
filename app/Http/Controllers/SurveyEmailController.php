@@ -454,7 +454,32 @@ class SurveyEmailController extends Controller
                 ], 410);
             }
 
-            // 4. ERRORES DE SESIÓN - Verificar si ya se respondió la encuesta
+            // 4. ERRORES DE AUTORIZACIÓN - Verificar si el encuestado está habilitado
+            $respondentRecord = NotificationSurvaysModel::where('id_survey', $surveyId)
+                ->where('destinatario', $tokenData['email'])
+                ->first();
+
+            if ($respondentRecord && !$respondentRecord->enabled) {
+                $this->logError('AUTH_ERROR', 'Encuestado deshabilitado', [
+                    'survey_id' => $surveyId,
+                    'email' => $tokenData['email'],
+                    'respondent_name' => $respondentRecord->respondent_name,
+                    'client_info' => $clientInfo
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'error_code' => 'RESPONDENT_DISABLED',
+                    'message' => 'No tienes autorización para responder esta encuesta',
+                    'disabled' => true,
+                    'user_message' => 'Esta encuesta ya no está disponible para ti.',
+                    'support_info' => [
+                        'action' => 'Contactar administrador si crees que esto es un error'
+                    ]
+                ], 403);
+            }
+
+            // 5. ERRORES DE SESIÓN - Verificar si ya se respondió la encuesta
             $notification = NotificationSurvaysModel::where('id_survey', $surveyId)
                 ->where('destinatario', $tokenData['email'])
                 ->where('state', 'completed') // Verificar que esté completada
@@ -484,7 +509,7 @@ class SurveyEmailController extends Controller
                 ], 409);
             }
 
-            // 5. ERRORES DE CONTENIDO - Verificar integridad de la encuesta
+            // 6. ERRORES DE CONTENIDO - Verificar integridad de la encuesta
             if (!$survey->title || empty(trim($survey->title))) {
                 $this->logError('CONTENT_ERROR', 'Encuesta sin título', [
                     'survey_id' => $surveyId,

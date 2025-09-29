@@ -338,6 +338,7 @@ Route::middleware(['debug.auth', 'auth:sanctum'])->group(function () {
         Route::post('/', 'store')->name('manual.survey.responses.store');
         Route::get('/survey/{surveyId}', 'getResponsesBySurvey')->name('manual.survey.responses.by.survey');
         Route::get('/', 'getAllResponses')->name('manual.survey.responses.all');
+        Route::post('/toggle-status', 'toggleRespondentStatus')->name('manual.survey.responses.toggle.status');
     });
 
     // Rutas alternativas para compatibilidad con frontend

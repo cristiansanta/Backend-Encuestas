@@ -22,6 +22,7 @@ class NotificationSurvaysModel extends Model
         'body', // Nuevo campo para cuerpo del mensaje
         'expired_date',
         'respondent_name',
+        'enabled', // Campo para controlar si el encuestado está habilitado
         'response_data',
         'scheduled_sending',
         'scheduled_date',
@@ -53,6 +54,7 @@ class NotificationSurvaysModel extends Model
         'retry_count' => 'integer', // Cast retry_count como integer
         'last_error' => 'string', // Cast last_error como string
         'state_results' => 'string', // Cast state_results como string (no boolean)
+        'enabled' => 'boolean', // Cast enabled como boolean
         'scheduled_sending' => 'boolean', // Cast para envío programado
         'scheduled_date' => 'datetime', // Cast para fecha programada
         'send_immediately' => 'boolean' // Cast para envío inmediato

@@ -28,17 +28,24 @@ class SurveyRespondentController extends Controller
                     ->first();
 
                 if ($notification) {
-                    // Determinar el estado basado en el estado de la notificación
-                    if ($notification->state === 'completed') {
+                    // Determinar el estado basado en el estado de la notificación y habilitación
+                    if (!$notification->enabled) {
+                        // Si está deshabilitado, el estado es Inválida
+                        $respondent->status = 'Inválida';
+                    } elseif ($notification->state === 'completed') {
                         $respondent->status = 'Contestada';
                     } elseif ($notification->state === '1') {
                         $respondent->status = 'Enviada';
                     }
 
+                    // Agregar el estado de habilitación
+                    $respondent->enabled = $notification->enabled;
+
                     // Log para debugging
                     \Log::info('🔍 Updated respondent status', [
                         'email' => $respondent->respondent_email,
                         'notification_state' => $notification->state,
+                        'enabled' => $notification->enabled,
                         'final_status' => $respondent->status
                     ]);
                 }
@@ -115,6 +122,8 @@ class SurveyRespondentController extends Controller
                     ->where('status', 'Enviada')->count(),
                 'contestada' => SurveyRespondentModel::where('survey_id', $surveyId)
                     ->where('status', 'Contestada')->count(),
+                'invalida' => SurveyRespondentModel::where('survey_id', $surveyId)
+                    ->where('status', 'Inválida')->count(),
             ];
 
             $stats['tasa_respuesta'] = $stats['total'] > 0 
@@ -143,7 +152,7 @@ class SurveyRespondentController extends Controller
     {
         $validatedData = $request->validate([
             'respondent_name' => 'nullable|string|max:255',
-            'status' => 'nullable|in:Enviada,Contestada',
+            'status' => 'nullable|in:Enviada,Contestada,Inválida',
             'response_data' => 'nullable|array'
         ]);
 

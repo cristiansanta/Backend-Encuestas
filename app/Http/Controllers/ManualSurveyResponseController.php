@@ -191,7 +191,8 @@ class ManualSurveyResponseController extends Controller
                     'respondent_email' => $response->destinatario, // Usar nuevo campo destinatario
                     'completed_at' => $response->date_insert,
                     'status' => 'Contestada',
-                    'responses' => $response->response_data
+                    'responses' => $response->response_data,
+                    'enabled' => $response->enabled // Incluir el campo enabled
                 ];
             });
 
@@ -577,11 +578,20 @@ class ManualSurveyResponseController extends Controller
                 ]);
             }
 
-            // Si no ha respondido, buscar información del destinatario
+            // Si no ha respondido, buscar información del destinatario y verificar si está habilitado
             $recipientInfo = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
                 ->where('destinatario', $data['email'])
-                ->where('state', '1') // Estado enviado
-                ->first();
+                ->first(); // Buscar cualquier registro (sin filtrar por estado)
+
+            // Verificar si el encuestado está deshabilitado
+            if ($recipientInfo && !$recipientInfo->enabled) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Esta encuesta ya no está disponible para ti',
+                    'disabled' => true,
+                    'error_code' => 'RESPONDENT_DISABLED'
+                ], 403);
+            }
 
             $responseData = [
                 'success' => true,
@@ -674,6 +684,75 @@ class ManualSurveyResponseController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Error al obtener respuestas del encuestado',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Habilitar o deshabilitar un encuestado para una encuesta específica
+     */
+    public function toggleRespondentStatus(Request $request)
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'survey_id' => 'required|integer|min:1',
+                'email' => 'required|email|max:255',
+                'enabled' => 'required|boolean'
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Datos de validación incorrectos',
+                    'errors' => $validator->errors()
+                ], 400);
+            }
+
+            $data = $validator->validated();
+
+            // Buscar el registro del encuestado en la encuesta
+            $respondentRecord = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
+                ->where('destinatario', $data['email'])
+                ->first();
+
+            if (!$respondentRecord) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No se encontró el encuestado en esta encuesta'
+                ], 404);
+            }
+
+            // Actualizar el estado habilitado/deshabilitado
+            $respondentRecord->update(['enabled' => $data['enabled']]);
+
+            $statusText = $data['enabled'] ? 'habilitado' : 'deshabilitado';
+
+            \Log::info('Respondent status updated', [
+                'survey_id' => $data['survey_id'],
+                'email' => $data['email'],
+                'enabled' => $data['enabled'],
+                'respondent_name' => $respondentRecord->respondent_name
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Encuestado {$statusText} exitosamente",
+                'data' => [
+                    'survey_id' => $data['survey_id'],
+                    'email' => $data['email'],
+                    'enabled' => $data['enabled'],
+                    'respondent_name' => $respondentRecord->respondent_name,
+                    'status_text' => $statusText
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            \Log::error('Error toggling respondent status: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al cambiar el estado del encuestado',
                 'error' => $e->getMessage()
             ], 500);
         }
