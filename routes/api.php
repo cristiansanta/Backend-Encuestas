@@ -78,6 +78,12 @@ Route::get('surveys/{id}/public-details', [SurveyController::class, 'getPublicSu
 Route::post('public/survey-responses', [ManualSurveyResponseController::class, 'store'])->name('public.survey.responses.store');
 Route::post('public/manual-survey-responses', [ManualSurveyResponseController::class, 'store'])->name('public.manual.survey.responses.store');
 
+// Ruta pública para verificar si ya se respondió una encuesta
+Route::post('check-survey-response', [ManualSurveyResponseController::class, 'checkDuplicateResponse'])->name('check.survey.response');
+
+// Ruta pública para obtener respuestas de un encuestado específico
+Route::post('get-respondent-responses', [ManualSurveyResponseController::class, 'getRespondentResponses'])->name('get.respondent.responses');
+
 
 // Temporary test without auth - DISABLED for security
 // Route::get('/surveys/', [SurveyController::class, 'index'])->name('surveys.index.test');

@@ -456,8 +456,9 @@ class SurveyEmailController extends Controller
 
             // 4. ERRORES DE SESIÓN - Verificar si ya se respondió la encuesta
             $notification = NotificationSurvaysModel::where('id_survey', $surveyId)
-                ->where('destinatario', $tokenData['email']) // Usar nuevo campo destinatario
-                ->where('state_results', 'true') // Cambiar a string
+                ->where('destinatario', $tokenData['email'])
+                ->where('state', 'completed') // Verificar que esté completada
+                ->where('state_results', 'true')
                 ->whereNotNull('response_data')
                 ->first();
 
@@ -589,27 +590,63 @@ class SurveyEmailController extends Controller
 
             // Usar transacción para asegurar consistencia entre tablas
             \DB::transaction(function() use ($surveyId, $tokenData, $respondentName, $responses) {
-                // PERMITIR REENVÍOS: Crear nuevo registro siempre
-                $notification = NotificationSurvaysModel::create([
-                    'data' => json_encode([
-                        'survey_id' => $surveyId,
+                // CORREGIDO: Buscar y actualizar el registro existente en lugar de crear uno nuevo
+                $existingNotification = NotificationSurvaysModel::where('id_survey', $surveyId)
+                    ->where('destinatario', $tokenData['email'])
+                    ->where('state', '1') // Buscar notificaciones enviadas (state = '1')
+                    ->first();
+
+                if ($existingNotification) {
+                    // Actualizar el registro existente
+                    $existingNotification->update([
+                        'data' => json_encode([
+                            'survey_id' => $surveyId,
+                            'respondent_name' => $respondentName ?? $tokenData['respondent_name'],
+                            'type' => 'email_survey_response',
+                            'submitted_at' => Carbon::now(),
+                            'unique_token' => $tokenData['unique_id']
+                        ]),
+                        'state' => 'completed',
+                        'state_results' => 'true',
                         'respondent_name' => $respondentName ?? $tokenData['respondent_name'],
-                        'type' => 'email_survey_response',
-                        'submitted_at' => Carbon::now(),
-                        'unique_token' => $tokenData['unique_id']
-                    ]),
-                    'state' => 'completed',
-                    'state_results' => 'true',
-                    'date_insert' => Carbon::now(),
-                    'id_survey' => $surveyId,
-                    'destinatario' => $tokenData['email'],
-                    'asunto' => 'Respuesta de Encuesta',
-                    'body' => '', // Body vacío para respuestas
-                    'expired_date' => Carbon::createFromTimestamp($tokenData['expires_at']),
-                    'respondent_name' => $respondentName ?? $tokenData['respondent_name'],
-                    'response_data' => $responses,
-                    'scheduled_at' => Carbon::now()
-                ]);
+                        'response_data' => $responses,
+                        'scheduled_at' => Carbon::now()
+                    ]);
+
+                    $notification = $existingNotification;
+                    \Log::info('✅ Updated existing notification for response', [
+                        'notification_id' => $notification->id,
+                        'survey_id' => $surveyId,
+                        'email' => $tokenData['email']
+                    ]);
+                } else {
+                    // Si no existe notificación previa, crear una nueva (caso excepcional)
+                    $notification = NotificationSurvaysModel::create([
+                        'data' => json_encode([
+                            'survey_id' => $surveyId,
+                            'respondent_name' => $respondentName ?? $tokenData['respondent_name'],
+                            'type' => 'email_survey_response',
+                            'submitted_at' => Carbon::now(),
+                            'unique_token' => $tokenData['unique_id']
+                        ]),
+                        'state' => 'completed',
+                        'state_results' => 'true',
+                        'date_insert' => Carbon::now(),
+                        'id_survey' => $surveyId,
+                        'destinatario' => $tokenData['email'],
+                        'asunto' => 'Respuesta de Encuesta',
+                        'body' => '',
+                        'expired_date' => Carbon::createFromTimestamp($tokenData['expires_at']),
+                        'respondent_name' => $respondentName ?? $tokenData['respondent_name'],
+                        'response_data' => $responses,
+                        'scheduled_at' => Carbon::now()
+                    ]);
+
+                    \Log::warning('⚠️ Created new notification for response (no existing notification found)', [
+                        'survey_id' => $surveyId,
+                        'email' => $tokenData['email']
+                    ]);
+                }
 
                 // CRÍTICO: Sincronizar con survey_respondents
                 SurveyRespondentModel::where('survey_id', $surveyId)

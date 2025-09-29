@@ -20,6 +20,32 @@ class SurveyRespondentController extends Controller
                 ->orderBy('sent_at', 'desc')
                 ->get();
 
+            // CORREGIDO: Obtener el estado actualizado desde notificationsurvays
+            $respondents = $respondents->map(function ($respondent) {
+                // Buscar el estado actual en la tabla notificationsurvays
+                $notification = \App\Models\NotificationSurvaysModel::where('id_survey', $respondent->survey_id)
+                    ->where('destinatario', $respondent->respondent_email)
+                    ->first();
+
+                if ($notification) {
+                    // Determinar el estado basado en el estado de la notificación
+                    if ($notification->state === 'completed') {
+                        $respondent->status = 'Contestada';
+                    } elseif ($notification->state === '1') {
+                        $respondent->status = 'Enviada';
+                    }
+
+                    // Log para debugging
+                    \Log::info('🔍 Updated respondent status', [
+                        'email' => $respondent->respondent_email,
+                        'notification_state' => $notification->state,
+                        'final_status' => $respondent->status
+                    ]);
+                }
+
+                return $respondent;
+            });
+
             return response()->json([
                 'success' => true,
                 'data' => $respondents,
@@ -27,7 +53,7 @@ class SurveyRespondentController extends Controller
             ]);
         } catch (\Exception $e) {
             Log::error('Error fetching survey respondents: ' . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
                 'message' => 'Error al obtener respondientes',
