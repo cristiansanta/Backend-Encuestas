@@ -723,17 +723,53 @@ class ManualSurveyResponseController extends Controller
                 ], 404);
             }
 
-            // Actualizar el estado habilitado/deshabilitado
-            $respondentRecord->update(['enabled' => $data['enabled']]);
+            // Lógica para guardar/restaurar el estado anterior
+            if ($data['enabled'] === false && $respondentRecord->enabled === true) {
+                // Se está deshabilitando: guardar el estado actual
+                $currentStatus = null;
+                if ($respondentRecord->state === 'completed') {
+                    $currentStatus = 'Contestada';
+                } elseif ($respondentRecord->state === '1') {
+                    $currentStatus = 'Enviada';
+                }
+
+                $respondentRecord->update([
+                    'enabled' => false,
+                    'previous_status' => $currentStatus
+                ]);
+            } elseif ($data['enabled'] === true && $respondentRecord->enabled === false) {
+                // Se está habilitando: restaurar el estado anterior si existe
+                if ($respondentRecord->previous_status) {
+                    // Restaurar el estado basado en el previous_status
+                    $newState = null;
+                    if ($respondentRecord->previous_status === 'Contestada') {
+                        $newState = 'completed';
+                    } elseif ($respondentRecord->previous_status === 'Enviada') {
+                        $newState = '1';
+                    }
+
+                    $respondentRecord->update([
+                        'enabled' => true,
+                        'state' => $newState,
+                        'previous_status' => null // Limpiar el estado anterior
+                    ]);
+                } else {
+                    // Si no hay estado anterior, solo habilitar
+                    $respondentRecord->update(['enabled' => true]);
+                }
+            } else {
+                // No hay cambio en el estado enabled
+                $respondentRecord->update(['enabled' => $data['enabled']]);
+            }
 
             $statusText = $data['enabled'] ? 'habilitado' : 'deshabilitado';
 
-            \Log::info('Respondent status updated', [
-                'survey_id' => $data['survey_id'],
-                'email' => $data['email'],
-                'enabled' => $data['enabled'],
-                'respondent_name' => $respondentRecord->respondent_name
-            ]);
+            // \Log::info('Respondent status updated', [
+            //     'survey_id' => $data['survey_id'],
+            //     'email' => $data['email'],
+            //     'enabled' => $data['enabled'],
+            //     'respondent_name' => $respondentRecord->respondent_name
+            // ]);
 
             return response()->json([
                 'success' => true,
@@ -748,7 +784,7 @@ class ManualSurveyResponseController extends Controller
             ], 200);
 
         } catch (\Exception $e) {
-            \Log::error('Error toggling respondent status: ' . $e->getMessage());
+            // \Log::error('Error toggling respondent status: ' . $e->getMessage());
 
             return response()->json([
                 'success' => false,

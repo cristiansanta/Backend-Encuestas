@@ -23,6 +23,7 @@ class NotificationSurvaysModel extends Model
         'expired_date',
         'respondent_name',
         'enabled', // Campo para controlar si el encuestado está habilitado
+        'previous_status', // Campo para guardar el estado anterior antes de deshabilitar
         'response_data',
         'scheduled_sending',
         'scheduled_date',
@@ -55,6 +56,7 @@ class NotificationSurvaysModel extends Model
         'last_error' => 'string', // Cast last_error como string
         'state_results' => 'string', // Cast state_results como string (no boolean)
         'enabled' => 'boolean', // Cast enabled como boolean
+        'previous_status' => 'string', // Cast previous_status como string
         'scheduled_sending' => 'boolean', // Cast para envío programado
         'scheduled_date' => 'datetime', // Cast para fecha programada
         'send_immediately' => 'boolean' // Cast para envío inmediato

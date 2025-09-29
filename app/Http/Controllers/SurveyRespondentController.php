@@ -38,16 +38,19 @@ class SurveyRespondentController extends Controller
                         $respondent->status = 'Enviada';
                     }
 
+                    // Agregar el estado anterior para referencia
+                    $respondent->previous_status = $notification->previous_status;
+
                     // Agregar el estado de habilitación
                     $respondent->enabled = $notification->enabled;
 
-                    // Log para debugging
-                    \Log::info('🔍 Updated respondent status', [
-                        'email' => $respondent->respondent_email,
-                        'notification_state' => $notification->state,
-                        'enabled' => $notification->enabled,
-                        'final_status' => $respondent->status
-                    ]);
+                    // Log para debugging (temporalmente deshabilitado)
+                    // \Log::info('🔍 Updated respondent status', [
+                    //     'email' => $respondent->respondent_email,
+                    //     'notification_state' => $notification->state,
+                    //     'enabled' => $notification->enabled,
+                    //     'final_status' => $respondent->status
+                    // ]);
                 }
 
                 return $respondent;
@@ -59,7 +62,7 @@ class SurveyRespondentController extends Controller
                 'total' => $respondents->count()
             ]);
         } catch (\Exception $e) {
-            Log::error('Error fetching survey respondents: ' . $e->getMessage());
+            // Log::error('Error fetching survey respondents: ' . $e->getMessage());
 
             return response()->json([
                 'success' => false,
