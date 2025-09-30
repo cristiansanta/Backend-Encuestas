@@ -89,22 +89,57 @@ class ManualSurveyResponseController extends Controller
                 ], 403);
             }
 
-            // Crear registro en notificationsurvays para el seguimiento
-            $notification = NotificationSurvaysModel::create([
-                'data' => json_encode([
-                    'survey_id' => $data['survey_id'],
+            // MEJORADO: Buscar primero si existe una notificación enviada para este email y encuesta
+            $existingNotification = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
+                ->where('destinatario', $data['respondent_email'])
+                ->where('state', '1') // Solo buscar notificaciones enviadas (state = '1')
+                ->first();
+
+            if ($existingNotification) {
+                // Si existe una notificación enviada, actualizarla en lugar de crear una nueva
+                $existingNotification->update([
+                    'data' => json_encode([
+                        'survey_id' => $data['survey_id'],
+                        'respondent_name' => $data['respondent_name'],
+                        'type' => 'email_survey_response',
+                        'submitted_at' => Carbon::now()
+                    ]),
+                    'state' => 'completed',
+                    'state_results' => 'true',
                     'respondent_name' => $data['respondent_name'],
-                    'type' => 'manual_response'
-                ]),
-                'state' => '1',
-                'state_results' => 'true', // Cambiar de boolean a string
-                'date_insert' => Carbon::now(),
-                'id_survey' => $data['survey_id'],
-                'destinatario' => $data['respondent_email'], // Usar nuevo campo destinatario
-                'expired_date' => Carbon::now()->addDays(30),
-                'respondent_name' => $data['respondent_name'],
-                'response_data' => $data['responses'] // Can be either array or object, stored as JSON
-            ]);
+                    'response_data' => $data['responses']
+                ]);
+
+                $notification = $existingNotification;
+                \Log::info('✅ Updated existing notification for email response (via store method)', [
+                    'notification_id' => $notification->id,
+                    'survey_id' => $data['survey_id'],
+                    'email' => $data['respondent_email']
+                ]);
+            } else {
+                // Si no existe notificación previa, crear nueva (respuesta manual del administrador)
+                $notification = NotificationSurvaysModel::create([
+                    'data' => json_encode([
+                        'survey_id' => $data['survey_id'],
+                        'respondent_name' => $data['respondent_name'],
+                        'type' => 'manual_response'
+                    ]),
+                    'state' => 'completed',
+                    'state_results' => 'true',
+                    'date_insert' => Carbon::now(),
+                    'id_survey' => $data['survey_id'],
+                    'destinatario' => $data['respondent_email'],
+                    'expired_date' => Carbon::now()->addDays(30),
+                    'respondent_name' => $data['respondent_name'],
+                    'response_data' => $data['responses']
+                ]);
+
+                \Log::info('✅ Created new notification for manual response', [
+                    'notification_id' => $notification->id,
+                    'survey_id' => $data['survey_id'],
+                    'email' => $data['respondent_email']
+                ]);
+            }
 
             // Las respuestas se almacenan como JSON en response_data, no como registros individuales
             // ya que el frontend envía un objeto con las respuestas estructuradas
@@ -156,7 +191,8 @@ class ManualSurveyResponseController extends Controller
                     'respondent_email' => $response->destinatario, // Usar nuevo campo destinatario
                     'completed_at' => $response->date_insert,
                     'status' => 'Contestada',
-                    'responses' => $response->response_data
+                    'responses' => $response->response_data,
+                    'enabled' => $response->enabled // Incluir el campo enabled
                 ];
             });
 
@@ -409,25 +445,78 @@ class ManualSurveyResponseController extends Controller
                 }
             }
 
-            // PERMITIR REENVÍOS: Eliminar verificación de duplicados para permitir múltiples respuestas
+            // CORREGIDO: Buscar y actualizar registro existente en lugar de crear duplicados
+            if (!empty($data['token'])) {
+                // Para respuestas con token (desde email), buscar y actualizar el registro existente
+                $existingNotification = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
+                    ->where('destinatario', $data['respondent_email'])
+                    ->where('state', '1') // Solo buscar notificaciones enviadas (state = '1')
+                    ->first();
 
-            // PERMITIR REENVÍOS: Crear nuevo registro siempre
-            $notification = NotificationSurvaysModel::create([
-                'data' => json_encode([
-                    'survey_id' => $data['survey_id'],
+                if ($existingNotification) {
+                    // Actualizar el registro existente
+                    $existingNotification->update([
+                        'data' => json_encode([
+                            'survey_id' => $data['survey_id'],
+                            'respondent_name' => $data['respondent_name'],
+                            'type' => 'email_survey_response',
+                            'submitted_at' => Carbon::now()
+                        ]),
+                        'state' => 'completed',
+                        'state_results' => 'true',
+                        'respondent_name' => $data['respondent_name'],
+                        'response_data' => $data['responses']
+                    ]);
+
+                    $notification = $existingNotification;
+                    \Log::info('✅ Updated existing notification for token-based response', [
+                        'notification_id' => $notification->id,
+                        'survey_id' => $data['survey_id'],
+                        'email' => $data['respondent_email']
+                    ]);
+                } else {
+                    // Si no existe notificación previa, crear una nueva (caso excepcional)
+                    $notification = NotificationSurvaysModel::create([
+                        'data' => json_encode([
+                            'survey_id' => $data['survey_id'],
+                            'respondent_name' => $data['respondent_name'],
+                            'type' => 'email_survey_response',
+                            'submitted_at' => Carbon::now()
+                        ]),
+                        'state' => 'completed',
+                        'state_results' => 'true',
+                        'date_insert' => Carbon::now(),
+                        'id_survey' => $data['survey_id'],
+                        'destinatario' => $data['respondent_email'],
+                        'expired_date' => Carbon::now()->addDays(30),
+                        'respondent_name' => $data['respondent_name'],
+                        'response_data' => $data['responses']
+                    ]);
+
+                    \Log::warning('⚠️ Created new notification for token-based response (no existing notification found)', [
+                        'survey_id' => $data['survey_id'],
+                        'email' => $data['respondent_email']
+                    ]);
+                }
+            } else {
+                // Para respuestas manuales (sin token), crear nuevo registro siempre
+                $notification = NotificationSurvaysModel::create([
+                    'data' => json_encode([
+                        'survey_id' => $data['survey_id'],
+                        'respondent_name' => $data['respondent_name'],
+                        'type' => 'manual_response',
+                        'submitted_at' => Carbon::now()
+                    ]),
+                    'state' => 'completed',
+                    'state_results' => 'true',
+                    'date_insert' => Carbon::now(),
+                    'id_survey' => $data['survey_id'],
+                    'destinatario' => $data['respondent_email'],
+                    'expired_date' => Carbon::now()->addDays(30),
                     'respondent_name' => $data['respondent_name'],
-                    'type' => !empty($data['token']) ? 'email_survey_response' : 'manual_response',
-                    'submitted_at' => Carbon::now()
-                ]),
-                'state' => 'completed',
-                'state_results' => 'true',
-                'date_insert' => Carbon::now(),
-                'id_survey' => $data['survey_id'],
-                'destinatario' => $data['respondent_email'],
-                'expired_date' => Carbon::now()->addDays(30),
-                'respondent_name' => $data['respondent_name'],
-                'response_data' => $data['responses']
-            ]);
+                    'response_data' => $data['responses']
+                ]);
+            }
 
             return response()->json([
                 'success' => true,
@@ -445,6 +534,261 @@ class ManualSurveyResponseController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Error al guardar la respuesta',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Verificar si ya existe una respuesta para una combinación de survey_id + email
+     */
+    public function checkDuplicateResponse(Request $request)
+    {
+        try {
+            // Validar los datos de entrada
+            $validator = Validator::make($request->all(), [
+                'survey_id' => 'required|integer',
+                'email' => 'required|email|max:255'
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Datos de validación incorrectos',
+                    'errors' => $validator->errors()
+                ], 400);
+            }
+
+            $data = $validator->validated();
+
+            // Buscar si ya existe una respuesta completada para esta combinación
+            $existingResponse = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
+                ->where('destinatario', $data['email'])
+                ->where('state', 'completed')
+                ->where('state_results', 'true')
+                ->whereNotNull('response_data')
+                ->first();
+
+            if ($existingResponse) {
+                return response()->json([
+                    'success' => true,
+                    'already_responded' => true,
+                    'message' => 'Esta encuesta ya fue respondida por este correo electrónico',
+                    'response_date' => $existingResponse->date_insert
+                ]);
+            }
+
+            // Si no ha respondido, buscar información del destinatario y verificar si está habilitado
+            $recipientInfo = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
+                ->where('destinatario', $data['email'])
+                ->first(); // Buscar cualquier registro (sin filtrar por estado)
+
+            // Verificar si el encuestado está deshabilitado
+            if ($recipientInfo && !$recipientInfo->enabled) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Esta encuesta ya no está disponible para ti',
+                    'disabled' => true,
+                    'error_code' => 'RESPONDENT_DISABLED'
+                ], 403);
+            }
+
+            $responseData = [
+                'success' => true,
+                'already_responded' => false,
+                'message' => 'No se encontró respuesta previa para esta encuesta'
+            ];
+
+            // Agregar información del destinatario si está disponible
+            if ($recipientInfo) {
+                $responseData['recipient_data'] = [
+                    'email' => $recipientInfo->destinatario,
+                    'name' => $recipientInfo->respondent_name ?? null
+                ];
+            }
+
+            return response()->json($responseData);
+
+        } catch (\Exception $e) {
+            \Log::error('Error checking duplicate response: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al verificar respuesta duplicada',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Obtener las respuestas de un encuestado específico
+     */
+    public function getRespondentResponses(Request $request)
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'survey_id' => 'required|integer|min:1',
+                'email' => 'required|email|max:255'
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Datos de validación incorrectos',
+                    'errors' => $validator->errors()
+                ], 400);
+            }
+
+            $data = $validator->validated();
+
+            // Buscar la respuesta específica del encuestado
+            $respondentResponse = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
+                ->where('destinatario', $data['email'])
+                ->where('state', 'completed')
+                ->where('state_results', 'true')
+                ->whereNotNull('response_data')
+                ->first();
+
+            if (!$respondentResponse) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No se encontraron respuestas para este encuestado'
+                ], 404);
+            }
+
+            // Formatear la respuesta
+            $responseData = $respondentResponse->response_data;
+            // Si response_data es un string JSON, parsearlo
+            if (is_string($responseData)) {
+                $responseData = json_decode($responseData, true);
+            }
+
+            $formattedResponse = [
+                'id' => $respondentResponse->id,
+                'survey_id' => $respondentResponse->id_survey,
+                'respondent_name' => $respondentResponse->respondent_name,
+                'respondent_email' => $respondentResponse->destinatario,
+                'completed_at' => $respondentResponse->date_insert,
+                'status' => 'Contestada',
+                'responses' => $responseData
+            ];
+
+            return response()->json([
+                'success' => true,
+                'data' => $formattedResponse
+            ], 200);
+
+        } catch (\Exception $e) {
+            \Log::error('Error getting respondent responses: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener respuestas del encuestado',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Habilitar o deshabilitar un encuestado para una encuesta específica
+     */
+    public function toggleRespondentStatus(Request $request)
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'survey_id' => 'required|integer|min:1',
+                'email' => 'required|email|max:255',
+                'enabled' => 'required|boolean'
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Datos de validación incorrectos',
+                    'errors' => $validator->errors()
+                ], 400);
+            }
+
+            $data = $validator->validated();
+
+            // Buscar el registro del encuestado en la encuesta
+            $respondentRecord = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
+                ->where('destinatario', $data['email'])
+                ->first();
+
+            if (!$respondentRecord) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No se encontró el encuestado en esta encuesta'
+                ], 404);
+            }
+
+            // Lógica para guardar/restaurar el estado anterior
+            if ($data['enabled'] === false && $respondentRecord->enabled === true) {
+                // Se está deshabilitando: guardar el estado actual
+                $currentStatus = null;
+                if ($respondentRecord->state === 'completed') {
+                    $currentStatus = 'Contestada';
+                } elseif ($respondentRecord->state === '1') {
+                    $currentStatus = 'Enviada';
+                }
+
+                $respondentRecord->update([
+                    'enabled' => false,
+                    'previous_status' => $currentStatus
+                ]);
+            } elseif ($data['enabled'] === true && $respondentRecord->enabled === false) {
+                // Se está habilitando: restaurar el estado anterior si existe
+                if ($respondentRecord->previous_status) {
+                    // Restaurar el estado basado en el previous_status
+                    $newState = null;
+                    if ($respondentRecord->previous_status === 'Contestada') {
+                        $newState = 'completed';
+                    } elseif ($respondentRecord->previous_status === 'Enviada') {
+                        $newState = '1';
+                    }
+
+                    $respondentRecord->update([
+                        'enabled' => true,
+                        'state' => $newState,
+                        'previous_status' => null // Limpiar el estado anterior
+                    ]);
+                } else {
+                    // Si no hay estado anterior, solo habilitar
+                    $respondentRecord->update(['enabled' => true]);
+                }
+            } else {
+                // No hay cambio en el estado enabled
+                $respondentRecord->update(['enabled' => $data['enabled']]);
+            }
+
+            $statusText = $data['enabled'] ? 'habilitado' : 'deshabilitado';
+
+            // \Log::info('Respondent status updated', [
+            //     'survey_id' => $data['survey_id'],
+            //     'email' => $data['email'],
+            //     'enabled' => $data['enabled'],
+            //     'respondent_name' => $respondentRecord->respondent_name
+            // ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Encuestado {$statusText} exitosamente",
+                'data' => [
+                    'survey_id' => $data['survey_id'],
+                    'email' => $data['email'],
+                    'enabled' => $data['enabled'],
+                    'respondent_name' => $respondentRecord->respondent_name,
+                    'status_text' => $statusText
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            // \Log::error('Error toggling respondent status: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al cambiar el estado del encuestado',
                 'error' => $e->getMessage()
             ], 500);
         }

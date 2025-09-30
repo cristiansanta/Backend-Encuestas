@@ -20,14 +20,50 @@ class SurveyRespondentController extends Controller
                 ->orderBy('sent_at', 'desc')
                 ->get();
 
+            // CORREGIDO: Obtener el estado actualizado desde notificationsurvays
+            $respondents = $respondents->map(function ($respondent) {
+                // Buscar el estado actual en la tabla notificationsurvays
+                $notification = \App\Models\NotificationSurvaysModel::where('id_survey', $respondent->survey_id)
+                    ->where('destinatario', $respondent->respondent_email)
+                    ->first();
+
+                if ($notification) {
+                    // Determinar el estado basado en el estado de la notificación y habilitación
+                    if (!$notification->enabled) {
+                        // Si está deshabilitado, el estado es Inválida
+                        $respondent->status = 'Inválida';
+                    } elseif ($notification->state === 'completed') {
+                        $respondent->status = 'Contestada';
+                    } elseif ($notification->state === '1') {
+                        $respondent->status = 'Enviada';
+                    }
+
+                    // Agregar el estado anterior para referencia
+                    $respondent->previous_status = $notification->previous_status;
+
+                    // Agregar el estado de habilitación
+                    $respondent->enabled = $notification->enabled;
+
+                    // Log para debugging (temporalmente deshabilitado)
+                    // \Log::info('🔍 Updated respondent status', [
+                    //     'email' => $respondent->respondent_email,
+                    //     'notification_state' => $notification->state,
+                    //     'enabled' => $notification->enabled,
+                    //     'final_status' => $respondent->status
+                    // ]);
+                }
+
+                return $respondent;
+            });
+
             return response()->json([
                 'success' => true,
                 'data' => $respondents,
                 'total' => $respondents->count()
             ]);
         } catch (\Exception $e) {
-            Log::error('Error fetching survey respondents: ' . $e->getMessage());
-            
+            // Log::error('Error fetching survey respondents: ' . $e->getMessage());
+
             return response()->json([
                 'success' => false,
                 'message' => 'Error al obtener respondientes',
@@ -89,6 +125,8 @@ class SurveyRespondentController extends Controller
                     ->where('status', 'Enviada')->count(),
                 'contestada' => SurveyRespondentModel::where('survey_id', $surveyId)
                     ->where('status', 'Contestada')->count(),
+                'invalida' => SurveyRespondentModel::where('survey_id', $surveyId)
+                    ->where('status', 'Inválida')->count(),
             ];
 
             $stats['tasa_respuesta'] = $stats['total'] > 0 
@@ -117,7 +155,7 @@ class SurveyRespondentController extends Controller
     {
         $validatedData = $request->validate([
             'respondent_name' => 'nullable|string|max:255',
-            'status' => 'nullable|in:Enviada,Contestada',
+            'status' => 'nullable|in:Enviada,Contestada,Inválida',
             'response_data' => 'nullable|array'
         ]);
 
