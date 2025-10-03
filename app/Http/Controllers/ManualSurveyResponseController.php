@@ -9,6 +9,7 @@ use App\Models\SurveyModel;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Crypt;
 use Carbon\Carbon;
+use App\Services\URLIntegrityService;
 
 class ManualSurveyResponseController extends Controller
 {
@@ -258,19 +259,82 @@ class ManualSurveyResponseController extends Controller
         try {
             $validator = Validator::make($request->all(), [
                 'survey_id' => 'required|integer',
-                'token' => 'nullable|string'
+                'token' => 'nullable|string',
+                'email' => 'nullable|email',
+                'hash' => 'nullable|string'
             ]);
 
             if ($validator->fails()) {
+                \Log::warning('❌ URL validation failed - Invalid parameters', [
+                    'errors' => $validator->errors(),
+                    'ip' => $request->ip(),
+                    'user_agent' => $request->userAgent()
+                ]);
+
                 return response()->json([
                     'success' => false,
-                    'message' => 'Datos de validación incorrectos',
+                    'message' => 'Acceso no autorizado. Esta URL no es válida o ha sido modificada.',
                     'errors' => $validator->errors()
                 ], 400);
             }
 
             $surveyId = $request->input('survey_id');
             $token = $request->input('token');
+            $email = $request->input('email');
+            $hash = $request->input('hash');
+
+            // SEGURIDAD CRÍTICA: Validar integridad de URL para acceso sin token
+            if (!$token && !$hash) {
+                \Log::warning('❌ Security violation - URL missing both token and hash', [
+                    'survey_id' => $surveyId,
+                    'email' => $email,
+                    'ip' => $request->ip(),
+                    'url' => $request->fullUrl()
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Acceso no autorizado. Esta URL no es válida o ha sido modificada.'
+                ], 401);
+            }
+
+            // SEGURIDAD: Validar hash de integridad para URLs sin token
+            if (!$token && $hash) {
+                if (!$email) {
+                    \Log::warning('❌ Hash validation failed - Missing email parameter', [
+                        'survey_id' => $surveyId,
+                        'hash' => $hash,
+                        'ip' => $request->ip()
+                    ]);
+
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Acceso no autorizado. Esta URL no es válida o ha sido modificada.'
+                    ], 401);
+                }
+
+                // Validar formato de email
+                if (!URLIntegrityService::validateEmailFormat($email)) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Acceso no autorizado. Esta URL no es válida o ha sido modificada.'
+                    ], 401);
+                }
+
+                // Validar hash de integridad
+                if (!URLIntegrityService::validateHash($surveyId, $email, $hash)) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Acceso no autorizado. Esta URL no es válida o ha sido modificada.'
+                    ], 401);
+                }
+
+                \Log::info('✅ Hash-based URL validation successful', [
+                    'survey_id' => $surveyId,
+                    'email' => $email,
+                    'ip' => $request->ip()
+                ]);
+            }
 
             // Verificar que la encuesta existe
             $survey = SurveyModel::with(['sections', 'surveyQuestions'])->find($surveyId);
