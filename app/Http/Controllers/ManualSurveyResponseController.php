@@ -321,12 +321,43 @@ class ManualSurveyResponseController extends Controller
                     ], 401);
                 }
 
-                // Validar hash de integridad
-                if (!URLIntegrityService::validateHash($surveyId, $email, $hash)) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'Acceso no autorizado. Esta URL no es válida o ha sido modificada.'
-                    ], 401);
+                // Validar hash de integridad y obtener resultado detallado
+                $hashValidationResult = URLIntegrityService::validateHashWithDetails($surveyId, $email, $hash);
+
+                if (!$hashValidationResult['valid']) {
+                    $errorType = $hashValidationResult['error_type'] ?? 'invalid_url';
+
+                    switch ($errorType) {
+                        case 'device_mismatch':
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Este enlace solo puede ser usado desde el dispositivo original.',
+                                'error_type' => 'device_mismatch'
+                            ], 403);
+
+                        case 'link_sharing':
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Este enlace no puede ser compartido. Cada enlace es personal e intransferible.',
+                                'error_type' => 'link_sharing'
+                            ], 403);
+
+                        case 'hash_expired':
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'El enlace de acceso ha expirado.',
+                                'error_type' => 'expired'
+                            ], 401);
+
+                        case 'hash_tampering':
+                        case 'invalid_format':
+                        default:
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Acceso no autorizado. Esta URL no es válida o ha sido modificada.',
+                                'error_type' => 'invalid_url'
+                            ], 401);
+                    }
                 }
 
                 \Log::info('✅ Hash-based URL validation successful', [
