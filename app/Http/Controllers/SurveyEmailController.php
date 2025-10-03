@@ -177,8 +177,10 @@ class SurveyEmailController extends Controller
 
             // BUSCAR NOTIFICACIÓN EXISTENTE en lugar de crear nueva
             // Esto evita duplicados del flujo AsignationMigrate -> Notification/store
+            // CORREGIDO: Buscar registros con CUALQUIER estado válido para evitar duplicados
             $notification = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
                 ->where('destinatario', $data['email']) // Usar nuevo campo destinatario
+                ->whereIn('state', ['1', 'sent', 'enviado', 'enviada']) // Verificar cualquier estado enviado
                 ->orderBy('date_insert', 'desc')
                 ->first();
 

@@ -58,6 +58,9 @@ Route::prefix('groups-test')->controller(GroupController::class)->group(function
 // Ruta temporal para testing de notificaciones (sin autenticación)
 Route::post('notification-test/store', [NotificationSurvaysController::class, 'store']);
 
+// Ruta para verificar duplicados antes de envío masivo
+Route::post('notifications/check-duplicates', [NotificationSurvaysController::class, 'checkDuplicateNotifications']);
+
 // Rutas públicas para acceso a encuestas por correo (sin autenticación)
 Route::prefix('survey-email')->controller(SurveyEmailController::class)->group(function () {
     Route::post('/validate-access', 'validateAccess')->name('survey.email.validate');

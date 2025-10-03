@@ -15,6 +15,87 @@ use Carbon\Carbon;
 class NotificationSurvaysController extends Controller
 {
 
+    /**
+     * Verificar qué usuarios de una lista ya recibieron una encuesta específica
+     * CRÍTICO: Prevenir envíos duplicados en envíos masivos
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function checkDuplicateNotifications(Request $request)
+    {
+        try {
+            $validatedData = $request->validate([
+                'survey_id' => 'required|integer',
+                'emails' => 'required|array',
+                'emails.*' => 'required|email'
+            ]);
+
+            $surveyId = $validatedData['survey_id'];
+            $emails = $validatedData['emails'];
+
+            // Buscar notificaciones existentes para esta encuesta y estos emails
+            // Verificar CUALQUIER estado válido para detectar duplicados
+            $existingNotifications = NotificationSurvaysModel::where('id_survey', $surveyId)
+                ->whereIn('destinatario', $emails)
+                ->whereIn('state', ['1', 'sent', 'enviado', 'enviada']) // Cualquier estado enviado
+                ->get(['destinatario', 'date_insert', 'respondent_name', 'state'])
+                ->keyBy('destinatario');
+
+            // Buscar también en SurveyRespondentModel para doble verificación
+            $existingRespondents = SurveyRespondentModel::where('survey_id', $surveyId)
+                ->whereIn('respondent_email', $emails)
+                ->get(['respondent_email', 'sent_at', 'respondent_name', 'status'])
+                ->keyBy('respondent_email');
+
+            $result = [
+                'already_notified' => [],
+                'not_notified' => [],
+                'summary' => [
+                    'total_emails' => count($emails),
+                    'already_sent' => 0,
+                    'ready_to_send' => 0
+                ]
+            ];
+
+            foreach ($emails as $email) {
+                $alreadyNotified = $existingNotifications->has($email) || $existingRespondents->has($email);
+
+                if ($alreadyNotified) {
+                    $notificationData = $existingNotifications->get($email);
+                    $respondentData = $existingRespondents->get($email);
+
+                    $result['already_notified'][] = [
+                        'email' => $email,
+                        'name' => $notificationData?->respondent_name ?? $respondentData?->respondent_name ?? 'Usuario',
+                        'sent_at' => $notificationData?->date_insert ?? $respondentData?->sent_at ?? null,
+                        'source' => $notificationData ? 'notification' : 'respondent'
+                    ];
+                    $result['summary']['already_sent']++;
+                } else {
+                    $result['not_notified'][] = [
+                        'email' => $email,
+                        'ready_to_send' => true
+                    ];
+                    $result['summary']['ready_to_send']++;
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $result,
+                'message' => "Verificación completada: {$result['summary']['already_sent']} ya enviados, {$result['summary']['ready_to_send']} listos para enviar"
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al verificar duplicados',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
     public function index(Request $request)
     {
         // Validar los parámetros opcionales id_survey y email
@@ -82,16 +163,71 @@ class NotificationSurvaysController extends Controller
         $userData = GroupUserModel::where('correo', $validatedData['email'])->first();
 
         // Extraer información adicional de los datos
+        // DEBUG: Log antes y después del JSON decode
+        \Log::info('🔧 JSON Decode - Antes:', [
+            'data_raw_type' => gettype($validatedData['data']),
+            'data_raw_is_string' => is_string($validatedData['data']),
+            'data_raw_length' => is_string($validatedData['data']) ? strlen($validatedData['data']) : 'N/A'
+        ]);
+
         $data = is_string($validatedData['data']) ? json_decode($validatedData['data'], true) : $validatedData['data'];
+
+        \Log::info('🔧 JSON Decode - Después:', [
+            'data_decoded_type' => gettype($data),
+            'data_is_array' => is_array($data),
+            'data_keys' => is_array($data) ? array_keys($data) : 'N/A',
+            'has_cuerpo_after_decode' => is_array($data) ? isset($data['cuerpo']) : false,
+            'cuerpo_length_after_decode' => is_array($data) && isset($data['cuerpo']) ? strlen($data['cuerpo']) : 0,
+            'json_last_error' => json_last_error(),
+            'json_last_error_msg' => json_last_error_msg()
+        ]);
+
         $groupName = $data['grupo'] ?? null;
         $respondentName = $validatedData['respondent_name'] ?? ($userData ? $userData->nombre : null) ?? $data['nombre'] ?? $this->extractNameFromEmail($validatedData['email']);
 
-        // PERMITIR REENVÍOS: En lugar de bloquear, actualizar la notificación existente o crear una nueva
-        // Esto permite enviar la misma encuesta varias veces al mismo correo
+        // DEBUG: Log para verificar que los datos incluyen asunto y cuerpo
+        \Log::info('NotificationSurvaysController - Datos recibidos:', [
+            'email' => $validatedData['email'],
+            'data_keys' => array_keys($data),
+            'has_asunto' => isset($data['asunto']),
+            'has_cuerpo' => isset($data['cuerpo']),
+            'asunto_length' => isset($data['asunto']) ? strlen($data['asunto']) : 0,
+            'cuerpo_length' => isset($data['cuerpo']) ? strlen($data['cuerpo']) : 0
+        ]);
+
+        // VERIFICAR DUPLICADOS: Evitar registros duplicados en NotificationSurvaysModel
+        // Verificar CUALQUIER estado (1, sent, etc.) para la misma combinación survey+email
+        $existingNotification = NotificationSurvaysModel::where('id_survey', $validatedData['id_survey'])
+            ->where('destinatario', $validatedData['email'])
+            ->whereIn('state', ['1', 'sent', 'enviado', 'enviada'])
+            ->first();
+
+        if ($existingNotification) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Esta encuesta ya fue enviada a este correo electrónico',
+                'existing_notification' => [
+                    'id' => $existingNotification->id,
+                    'sent_at' => $existingNotification->date_insert,
+                    'survey_id' => $existingNotification->id_survey,
+                    'email' => $existingNotification->destinatario
+                ]
+            ], 409); // Conflict
+        }
 
         // Separar información del correo de metadatos
         $asunto = $data['asunto'] ?? 'Invitación a Encuesta';
         $body = $data['cuerpo'] ?? '';
+
+        // DEBUG: Log específico para verificar asignación de variables
+        \Log::info('🔧 Variables antes de insertar:', [
+            'asunto_var' => $asunto,
+            'asunto_length' => strlen($asunto),
+            'body_var' => substr($body, 0, 100) . '...', // Primeros 100 caracteres
+            'body_full_length' => strlen($body),
+            'body_is_empty' => empty($body),
+            'body_type' => gettype($body)
+        ]);
 
         // Preparar metadatos optimizados (sin HTML ni redundancias)
         $optimizedData = [
@@ -125,8 +261,8 @@ class NotificationSurvaysController extends Controller
             $scheduledAt = now(); // Envío inmediato
         }
 
-        // Crear registro con nueva estructura optimizada
-        $record = NotificationSurvaysModel::create([
+        // DEBUG: Log datos que van a la base de datos
+        $dataToInsert = [
             'data' => json_encode($optimizedData),
             'state' => $validatedData['state'] ?? '1',
             'state_results' => $validatedData['state_results'] ?? 'false',
@@ -143,6 +279,25 @@ class NotificationSurvaysController extends Controller
                 : now(), // Asignar fecha actual para envío inmediato
             'send_immediately' => $validatedData['send_immediately'] ?? true,
             'scheduled_at' => $scheduledAt
+        ];
+
+        \Log::info('📝 Datos preparados para insertar en DB:', [
+            'asunto_db' => $dataToInsert['asunto'],
+            'body_db_length' => strlen($dataToInsert['body']),
+            'body_db_sample' => substr($dataToInsert['body'], 0, 100) . '...',
+            'destinatario' => $dataToInsert['destinatario'],
+            'id_survey' => $dataToInsert['id_survey']
+        ]);
+
+        // Crear registro con nueva estructura optimizada
+        $record = NotificationSurvaysModel::create($dataToInsert);
+
+        // DEBUG: Verificar que el registro se creó correctamente
+        \Log::info('✅ Registro creado - Verificación:', [
+            'record_id' => $record->id,
+            'record_body_length' => strlen($record->body ?? ''),
+            'record_asunto' => $record->asunto,
+            'record_destinatario' => $record->destinatario
         ]);
 
         // Crear registro de respondiente en estado "Enviada"
