@@ -66,6 +66,7 @@ Route::prefix('survey-email')->controller(SurveyEmailController::class)->group(f
     Route::post('/validate-access', 'validateAccess')->name('survey.email.validate');
     Route::post('/submit-response', 'submitSurveyResponse')->name('survey.email.submit');
     Route::post('/check-status', 'checkResponseStatus')->name('survey.email.status');
+    Route::post('/generate-hash', 'generateValidHash')->name('survey.email.generate.hash');
 });
 
 // Rutas públicas para respuestas manuales con validación de token

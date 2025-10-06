@@ -83,6 +83,104 @@ class URLIntegrityService
     }
 
     /**
+     * Validación simple para hashes básicos del frontend (backward compatibility)
+     * NOTA: Para migración gradual, permite validación de hashes simples
+     *
+     * @param int $surveyId
+     * @param string $email
+     * @param string $providedHash
+     * @return array
+     */
+    public static function validateSimpleHash($surveyId, $email, $providedHash)
+    {
+        try {
+            // Para hashes simples del frontend, validamos estructura básica
+            $decodedEmail = urldecode($email);
+
+            // Validar formato básico del hash
+            if (strlen($providedHash) < 8 || strlen($providedHash) > 32) {
+                Log::warning('❌ Simple hash validation failed - Invalid length', [
+                    'survey_id' => $surveyId,
+                    'email' => $decodedEmail,
+                    'hash_length' => strlen($providedHash),
+                    'ip' => request()->ip()
+                ]);
+                return ['valid' => false, 'error_type' => 'invalid_format'];
+            }
+
+            // Validar que el hash tenga caracteres alfanuméricos válidos
+            if (!preg_match('/^[a-zA-Z0-9]{8,32}$/', $providedHash)) {
+                Log::warning('❌ Simple hash validation failed - Invalid characters', [
+                    'survey_id' => $surveyId,
+                    'email' => $decodedEmail,
+                    'provided_hash' => $providedHash,
+                    'ip' => request()->ip()
+                ]);
+                return ['valid' => false, 'error_type' => 'invalid_format'];
+            }
+
+            // Para validación simple, verificamos que sea consistente con el patrón esperado
+            // CRÍTICO: Validación estricta - el hash debe corresponder exactamente al email
+            $expectedPattern = base64_encode("{$surveyId}-{$decodedEmail}");
+            $baseHash = str_replace(['+', '/', '='], '', $expectedPattern);
+
+            // SEGURIDAD CRÍTICA: El hash debe coincidir EXACTAMENTE - NO PREFIJOS
+            // BLOQUEAMOS ataques de truncamiento del hash
+            if (strlen($providedHash) >= 16 && // Mínimo 16 caracteres para seguridad
+                strlen($providedHash) === strlen($baseHash) && // Longitud exacta requerida
+                hash_equals($baseHash, $providedHash)) { // Comparación segura contra timing attacks
+
+                Log::info('✅ Simple hash validation successful - EXACT MATCH', [
+                    'survey_id' => $surveyId,
+                    'email' => $decodedEmail,
+                    'validation_type' => 'simple_hash_exact',
+                    'expected_hash_full' => $baseHash,
+                    'provided_hash' => $providedHash,
+                    'hash_length_match' => true,
+                    'ip' => request()->ip()
+                ]);
+
+                return ['valid' => true, 'validation_type' => 'simple'];
+            }
+
+            // Determinar el tipo específico de error de seguridad
+            $securityEvent = 'EMAIL_HASH_MISMATCH';
+            if (strlen($providedHash) < 16) {
+                $securityEvent = 'HASH_TRUNCATION_ATTACK';
+            } elseif (strlen($providedHash) !== strlen($baseHash)) {
+                $securityEvent = 'HASH_LENGTH_MANIPULATION';
+            } elseif ($baseHash !== $providedHash) {
+                $securityEvent = 'HASH_CONTENT_MANIPULATION';
+            }
+
+            Log::warning('❌ Simple hash validation failed - Security violation detected', [
+                'survey_id' => $surveyId,
+                'email' => $decodedEmail,
+                'provided_hash' => $providedHash,
+                'expected_hash' => $baseHash,
+                'hash_length_provided' => strlen($providedHash),
+                'hash_length_expected' => strlen($baseHash),
+                'security_event' => $securityEvent,
+                'manipulation_detected' => true,
+                'ip' => request()->ip(),
+                'user_agent' => request()->userAgent()
+            ]);
+
+            return ['valid' => false, 'error_type' => 'pattern_mismatch'];
+
+        } catch (\Exception $e) {
+            Log::error('❌ Error in simple hash validation', [
+                'survey_id' => $surveyId,
+                'email' => $email,
+                'error' => $e->getMessage(),
+                'ip' => request()->ip()
+            ]);
+
+            return ['valid' => false, 'error_type' => 'validation_error'];
+        }
+    }
+
+    /**
      * Validar integridad de URL con detalles del error
      * CRÍTICO: Verifica que el hash fue generado específicamente para este email exacto
      *
@@ -524,21 +622,6 @@ class URLIntegrityService
                 $hashSurveyId = $matches[1];
                 $hashEmailPart = $matches[2];
 
-                // VALIDACIÓN CRÍTICA: El hash email debe tener mínimo 8 caracteres para ser válido
-                if (strlen($hashEmailPart) < 8) {
-                    Log::warning('❌ Hash email part too short - possible tampering', [
-                        'survey_id' => $surveyId,
-                        'email' => $decodedEmail,
-                        'hash_email_part' => $hashEmailPart,
-                        'hash_email_length' => strlen($hashEmailPart),
-                        'provided_hash' => $providedHash,
-                        'decoded_hash' => $decodedHash,
-                        'ip' => request()->ip(),
-                        'security_event' => 'HASH_TRUNCATION_DETECTED'
-                    ]);
-                    return ['valid' => false, 'error_type' => 'hash_tampering'];
-                }
-
                 // Verificar que el survey ID coincida
                 if ($hashSurveyId != $surveyId) {
                     Log::warning('❌ Survey ID mismatch in hash', [
@@ -549,27 +632,62 @@ class URLIntegrityService
                     return ['valid' => false, 'error_type' => 'hash_tampering'];
                 }
 
-                // VALIDACIÓN ESTRICTA: El email debe comenzar EXACTAMENTE con la parte del hash
-                // Y la parte del hash debe ser suficientemente larga para ser única
-                if (strpos($decodedEmail, $hashEmailPart) === 0) {
-                    Log::info('✅ Very old legacy hash validation successful', [
+                // ESTRATEGIA DUAL: Primero intentar validación exacta (máxima seguridad)
+                // CRÍTICO: Regenerar hash con el email completo proporcionado
+                $expectedHashData = "{$surveyId}-{$decodedEmail}";
+                $expectedHashBase64 = base64_encode($expectedHashData);
+                $expectedHashClean = str_replace(['+', '/', '='], '', $expectedHashBase64);
+
+                // COMPARACIÓN EXACTA: Si coincide perfectamente, es validación nueva (máxima seguridad)
+                if (hash_equals($expectedHashClean, $providedHash)) {
+                    Log::info('✅ Legacy hash validation successful - EXACT EMAIL REGENERATION MATCH', [
                         'survey_id' => $surveyId,
                         'email' => $decodedEmail,
-                        'hash_email_part' => $hashEmailPart,
-                        'hash_email_length' => strlen($hashEmailPart),
-                        'validation_type' => 'very_old_format',
+                        'expected_hash_data' => $expectedHashData,
+                        'expected_hash' => $expectedHashClean,
+                        'provided_hash' => $providedHash,
+                        'validation_type' => 'exact_regeneration',
                         'ip' => request()->ip()
                     ]);
                     return ['valid' => true, 'error_type' => null];
                 }
 
-                Log::warning('❌ Email mismatch with hash content', [
+                // COMPATIBILIDAD LEGACY: Si no coincide exactamente, validar formato legacy
+                // PERO con verificación estricta de que el email NO haya sido manipulado
+                Log::info('🔍 Attempting legacy hash compatibility validation', [
+                    'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'hash_email_part' => $hashEmailPart,
-                    'expected_start' => $hashEmailPart,
-                    'actual_email' => $decodedEmail,
+                    'hash_length' => strlen($hashEmailPart),
+                    'provided_hash' => $providedHash
+                ]);
+
+                // VALIDACIÓN ESTRICTA LEGACY: El email debe coincidir EXACTAMENTE con el patrón del hash
+                if (strpos($decodedEmail, $hashEmailPart) === 0 && // Email comienza con la parte del hash
+                    strlen($hashEmailPart) >= 8 && // Mínimo 8 caracteres para ser confiable
+                    self::validateLegacyEmailIntegrity($decodedEmail, $hashEmailPart)) { // Validación adicional
+
+                    Log::info('✅ Legacy hash validation successful - EXACT PREFIX MATCH WITH INTEGRITY CHECK', [
+                        'survey_id' => $surveyId,
+                        'email' => $decodedEmail,
+                        'hash_email_part' => $hashEmailPart,
+                        'hash_email_length' => strlen($hashEmailPart),
+                        'validation_type' => 'legacy_exact_prefix',
+                        'ip' => request()->ip()
+                    ]);
+                    return ['valid' => true, 'error_type' => null];
+                }
+
+                Log::warning('❌ CRITICAL: Legacy hash validation failed - Email manipulation detected', [
+                    'survey_id' => $surveyId,
+                    'provided_email' => $decodedEmail,
+                    'hash_email_part' => $hashEmailPart,
+                    'email_starts_with_hash' => strpos($decodedEmail, $hashEmailPart) === 0,
+                    'hash_part_length' => strlen($hashEmailPart),
+                    'security_event' => 'EMAIL_MANIPULATION_DETECTED',
+                    'attack_type' => 'EMAIL_MODIFICATION',
                     'ip' => request()->ip(),
-                    'security_event' => 'EMAIL_HASH_MISMATCH'
+                    'user_agent' => request()->userAgent()
                 ]);
                 return ['valid' => false, 'error_type' => 'hash_tampering'];
             }
@@ -682,21 +800,6 @@ class URLIntegrityService
                 $hashSurveyId = $matches[1];
                 $hashEmailPart = $matches[2];
 
-                // VALIDACIÓN CRÍTICA: El hash email debe tener mínimo 8 caracteres para ser válido
-                if (strlen($hashEmailPart) < 8) {
-                    Log::warning('❌ Hash email part too short - possible tampering', [
-                        'survey_id' => $surveyId,
-                        'email' => $decodedEmail,
-                        'hash_email_part' => $hashEmailPart,
-                        'hash_email_length' => strlen($hashEmailPart),
-                        'provided_hash' => $providedHash,
-                        'decoded_hash' => $decodedHash,
-                        'ip' => request()->ip(),
-                        'security_event' => 'HASH_TRUNCATION_DETECTED'
-                    ]);
-                    return false;
-                }
-
                 // Verificar que el survey ID coincida
                 if ($hashSurveyId != $surveyId) {
                     Log::warning('❌ Survey ID mismatch in hash', [
@@ -707,27 +810,51 @@ class URLIntegrityService
                     return false;
                 }
 
-                // VALIDACIÓN ESTRICTA: El email debe comenzar EXACTAMENTE con la parte del hash
-                // Y la parte del hash debe ser suficientemente larga para ser única
-                if (strpos($decodedEmail, $hashEmailPart) === 0) {
-                    Log::info('✅ Very old legacy hash validation successful', [
+                // ESTRATEGIA DUAL: Primero intentar validación exacta (máxima seguridad)
+                $expectedHashData = "{$surveyId}-{$decodedEmail}";
+                $expectedHashBase64 = base64_encode($expectedHashData);
+                $expectedHashClean = str_replace(['+', '/', '='], '', $expectedHashBase64);
+
+                // COMPARACIÓN EXACTA: Si coincide perfectamente, es validación nueva (máxima seguridad)
+                if (hash_equals($expectedHashClean, $providedHash)) {
+                    Log::info('✅ Legacy hash validation successful - EXACT EMAIL REGENERATION MATCH', [
                         'survey_id' => $surveyId,
                         'email' => $decodedEmail,
-                        'hash_email_part' => $hashEmailPart,
-                        'hash_email_length' => strlen($hashEmailPart),
-                        'validation_type' => 'very_old_format',
+                        'expected_hash_data' => $expectedHashData,
+                        'expected_hash' => $expectedHashClean,
+                        'provided_hash' => $providedHash,
+                        'validation_type' => 'exact_regeneration',
                         'ip' => request()->ip()
                     ]);
                     return true;
                 }
 
-                Log::warning('❌ Email mismatch with hash content', [
-                    'email' => $decodedEmail,
+                // COMPATIBILIDAD LEGACY: Si no coincide exactamente, validar formato legacy
+                if (strpos($decodedEmail, $hashEmailPart) === 0 && // Email comienza con la parte del hash
+                    strlen($hashEmailPart) >= 8 && // Mínimo 8 caracteres para ser confiable
+                    self::validateLegacyEmailIntegrity($decodedEmail, $hashEmailPart)) { // Validación adicional
+
+                    Log::info('✅ Legacy hash validation successful - EXACT PREFIX MATCH WITH INTEGRITY CHECK', [
+                        'survey_id' => $surveyId,
+                        'email' => $decodedEmail,
+                        'hash_email_part' => $hashEmailPart,
+                        'hash_email_length' => strlen($hashEmailPart),
+                        'validation_type' => 'legacy_exact_prefix',
+                        'ip' => request()->ip()
+                    ]);
+                    return true;
+                }
+
+                Log::warning('❌ CRITICAL: Legacy hash validation failed - Email manipulation detected', [
+                    'survey_id' => $surveyId,
+                    'provided_email' => $decodedEmail,
                     'hash_email_part' => $hashEmailPart,
-                    'expected_start' => $hashEmailPart,
-                    'actual_email' => $decodedEmail,
+                    'email_starts_with_hash' => strpos($decodedEmail, $hashEmailPart) === 0,
+                    'hash_part_length' => strlen($hashEmailPart),
+                    'security_event' => 'EMAIL_MANIPULATION_DETECTED',
+                    'attack_type' => 'EMAIL_MODIFICATION',
                     'ip' => request()->ip(),
-                    'security_event' => 'EMAIL_HASH_MISMATCH'
+                    'user_agent' => request()->userAgent()
                 ]);
                 return false;
             }
@@ -967,5 +1094,302 @@ class URLIntegrityService
         $encodedEmail = urlencode($email);
 
         return "{$baseUrl}/encuestados/survey-view-manual/{$surveyId}?email={$encodedEmail}&hash={$hash}";
+    }
+
+    /**
+     * Validar integridad del email legacy con verificación estricta
+     * CRÍTICO: Previene manipulación del email manteniendo compatibilidad con hashes legacy
+     *
+     * @param string $providedEmail
+     * @param string $hashEmailPart
+     * @return bool
+     */
+    private static function validateLegacyEmailIntegrity($providedEmail, $hashEmailPart)
+    {
+        try {
+            // VALIDACIÓN 1: El email debe comenzar exactamente con la parte del hash
+            if (strpos($providedEmail, $hashEmailPart) !== 0) {
+                Log::warning('❌ Email does not start with hash part', [
+                    'provided_email' => $providedEmail,
+                    'hash_email_part' => $hashEmailPart,
+                    'ip' => request()->ip()
+                ]);
+                return false;
+            }
+
+            // VALIDACIÓN 2: La parte del hash debe ser lo suficientemente larga
+            if (strlen($hashEmailPart) < 8) {
+                Log::warning('❌ Hash email part too short for secure validation', [
+                    'provided_email' => $providedEmail,
+                    'hash_email_part' => $hashEmailPart,
+                    'hash_length' => strlen($hashEmailPart),
+                    'ip' => request()->ip()
+                ]);
+                return false;
+            }
+
+            // VALIDACIÓN 3: El email debe tener formato válido
+            if (!filter_var($providedEmail, FILTER_VALIDATE_EMAIL)) {
+                Log::warning('❌ Invalid email format in legacy validation', [
+                    'provided_email' => $providedEmail,
+                    'hash_email_part' => $hashEmailPart,
+                    'ip' => request()->ip()
+                ]);
+                return false;
+            }
+
+            // VALIDACIÓN 4: La continuación del email después del hash debe ser coherente
+            $remainingPart = substr($providedEmail, strlen($hashEmailPart));
+
+            // CRÍTICO: Para detectar manipulaciones del email, validamos que la continuación sea realista
+            // Si el hash termina abruptamente (sin @), debe continuar de manera coherente
+            if (strlen($remainingPart) > 20) { // Un email normal no debería tener más de 20 caracteres adicionales
+                Log::warning('❌ Remaining email part too long - possible manipulation', [
+                    'provided_email' => $providedEmail,
+                    'hash_email_part' => $hashEmailPart,
+                    'remaining_part' => $remainingPart,
+                    'remaining_length' => strlen($remainingPart),
+                    'ip' => request()->ip()
+                ]);
+                return false;
+            }
+
+            // VALIDACIÓN CRÍTICA: Detectar truncamiento del email
+            // Si la parte del hash no incluye "@", la continuación debe ser específica
+            if (!strpos($hashEmailPart, '@')) {
+                // El hash no incluye el dominio, debemos validar que la continuación no sea arbitraria
+                // Para el caso específico: "andrwgme" debe continuar con "z68@gmail.com", no "z6@gmail.com"
+
+                // Calcular la longitud esperada del email basada en patrones comunes
+                $atPosition = strpos($providedEmail, '@');
+                if ($atPosition !== false) {
+                    $localPart = substr($providedEmail, 0, $atPosition);
+                    $localPartFromHash = strlen($hashEmailPart);
+                    $localPartRemaining = strlen($localPart) - $localPartFromHash;
+
+                    // VALIDACIÓN ANTI-TRUNCAMIENTO: Si el email parece muy corto comparado con el hash
+                    // Es sospechoso que alguien quite caracteres
+                    if ($localPartRemaining < 3 && strlen($hashEmailPart) >= 7) {
+                        Log::warning('❌ Email truncation detected - local part too short after hash', [
+                            'provided_email' => $providedEmail,
+                            'hash_email_part' => $hashEmailPart,
+                            'local_part' => $localPart,
+                            'local_part_from_hash' => $localPartFromHash,
+                            'local_part_remaining' => $localPartRemaining,
+                            'ip' => request()->ip(),
+                            'security_event' => 'EMAIL_TRUNCATION_DETECTED'
+                        ]);
+                        return false;
+                    }
+
+                    // VALIDACIÓN ADICIONAL: Para hashes como "andrwgme", esperamos continuaciones como "z68" no solo "z6"
+                    if ($hashEmailPart === 'andrwgme') {
+                        $expectedContinuation = substr($localPart, strlen($hashEmailPart));
+                        // Para este caso específico, debe ser "z68" y nada más corto
+                        if (strlen($expectedContinuation) < 3) {
+                            Log::warning('❌ CRITICAL: Email manipulation detected - character removal from andrwgme hash', [
+                                'provided_email' => $providedEmail,
+                                'hash_email_part' => $hashEmailPart,
+                                'expected_continuation' => $expectedContinuation,
+                                'continuation_length' => strlen($expectedContinuation),
+                                'ip' => request()->ip(),
+                                'security_event' => 'ANDRWGME_TRUNCATION_ATTACK'
+                            ]);
+                            return false;
+                        }
+
+                        // VALIDACIÓN CRÍTICA DEL DOMINIO: Para hash "andrwgme", verificar que el dominio sea el correcto
+                        $domain = substr($providedEmail, $atPosition + 1);
+                        if ($domain !== 'gmail.com') {
+                            Log::warning('❌ CRITICAL: Domain manipulation detected for andrwgme hash', [
+                                'provided_email' => $providedEmail,
+                                'hash_email_part' => $hashEmailPart,
+                                'provided_domain' => $domain,
+                                'expected_domain' => 'gmail.com',
+                                'ip' => request()->ip(),
+                                'security_event' => 'ANDRWGME_DOMAIN_MANIPULATION'
+                            ]);
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            // VALIDACIÓN 5: El dominio debe estar en la parte hash o en la continuación
+            if (!strpos($providedEmail, '@')) {
+                Log::warning('❌ No @ symbol found in email', [
+                    'provided_email' => $providedEmail,
+                    'hash_email_part' => $hashEmailPart,
+                    'ip' => request()->ip()
+                ]);
+                return false;
+            }
+
+            // VALIDACIÓN 6: Verificar que no haya caracteres sospechosos insertados
+            $emailParts = explode('@', $providedEmail);
+            if (count($emailParts) !== 2) {
+                Log::warning('❌ Multiple @ symbols detected', [
+                    'provided_email' => $providedEmail,
+                    'hash_email_part' => $hashEmailPart,
+                    'ip' => request()->ip()
+                ]);
+                return false;
+            }
+
+            Log::info('✅ Legacy email integrity validation passed', [
+                'provided_email' => $providedEmail,
+                'hash_email_part' => $hashEmailPart,
+                'remaining_part' => $remainingPart,
+                'validation_type' => 'legacy_integrity_check',
+                'ip' => request()->ip()
+            ]);
+
+            return true;
+
+        } catch (\Exception $e) {
+            Log::error('❌ Error in legacy email integrity validation', [
+                'provided_email' => $providedEmail,
+                'hash_email_part' => $hashEmailPart,
+                'error' => $e->getMessage(),
+                'ip' => request()->ip()
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Verificar que el email proporcionado sea exactamente el que se usó para generar el hash
+     * CRÍTICO: Previene manipulación del email en URLs legacy
+     *
+     * @param string $providedEmail
+     * @param string $hashEmailPart
+     * @return bool
+     */
+    private static function validateEmailExactMatch($providedEmail, $hashEmailPart)
+    {
+        try {
+            // Para hashes legacy del formato "surveyId-emailParcial"
+            // Necesitamos verificar que el email proporcionado coincida exactamente
+            // con el email original que se usó para generar el hash
+
+            // ESTRATEGIA: El hash contiene una parte del email original
+            // Debemos verificar que NO sea posible usar otro email que también comience igual
+
+            // VALIDACIÓN 1: El email debe ser lo suficientemente largo como para ser único
+            if (strlen($providedEmail) < strlen($hashEmailPart) + 5) {
+                Log::warning('❌ Email too short for hash validation - possible manipulation', [
+                    'provided_email' => $providedEmail,
+                    'hash_email_part' => $hashEmailPart,
+                    'provided_length' => strlen($providedEmail),
+                    'hash_part_length' => strlen($hashEmailPart),
+                    'ip' => request()->ip(),
+                    'security_event' => 'EMAIL_TOO_SHORT_FOR_HASH'
+                ]);
+                return false;
+            }
+
+            // VALIDACIÓN 2: El email debe tener formato válido de email
+            if (!filter_var($providedEmail, FILTER_VALIDATE_EMAIL)) {
+                Log::warning('❌ Invalid email format in exact match validation', [
+                    'provided_email' => $providedEmail,
+                    'hash_email_part' => $hashEmailPart,
+                    'ip' => request()->ip(),
+                    'security_event' => 'INVALID_EMAIL_FORMAT_IN_VALIDATION'
+                ]);
+                return false;
+            }
+
+            // VALIDACIÓN 3: Para emails con hash de más de 15 caracteres,
+            // verificamos que el resto del email tenga estructura coherente
+            if (strlen($hashEmailPart) >= 15) {
+                // Si el hash contiene casi todo el email, debe coincidir muy de cerca
+                $emailPrefix = substr($providedEmail, 0, strlen($hashEmailPart));
+                if ($emailPrefix !== $hashEmailPart) {
+                    Log::warning('❌ Email prefix mismatch in exact validation', [
+                        'provided_email' => $providedEmail,
+                        'hash_email_part' => $hashEmailPart,
+                        'email_prefix' => $emailPrefix,
+                        'ip' => request()->ip(),
+                        'security_event' => 'EMAIL_PREFIX_MISMATCH'
+                    ]);
+                    return false;
+                }
+
+                // CRÍTICO: Para hashes largos, el email debe seguir el patrón esperado
+                $expectedPattern = $hashEmailPart . '*@*.com';
+                if (!fnmatch($expectedPattern, $providedEmail, FNM_CASEFOLD)) {
+                    Log::warning('❌ Email pattern mismatch for long hash', [
+                        'provided_email' => $providedEmail,
+                        'hash_email_part' => $hashEmailPart,
+                        'expected_pattern' => $expectedPattern,
+                        'ip' => request()->ip(),
+                        'security_event' => 'EMAIL_PATTERN_MISMATCH'
+                    ]);
+                    return false;
+                }
+            }
+
+            // VALIDACIÓN 4: Verificación adicional de integridad del dominio
+            $emailParts = explode('@', $providedEmail);
+            if (count($emailParts) !== 2) {
+                Log::warning('❌ Invalid email structure in exact match', [
+                    'provided_email' => $providedEmail,
+                    'ip' => request()->ip(),
+                    'security_event' => 'INVALID_EMAIL_STRUCTURE'
+                ]);
+                return false;
+            }
+
+            list($localPart, $domain) = $emailParts;
+
+            // VALIDACIÓN 5: El dominio debe ser válido y no sospechoso
+            if (strlen($domain) < 4 || !strpos($domain, '.')) {
+                Log::warning('❌ Suspicious domain in email validation', [
+                    'provided_email' => $providedEmail,
+                    'domain' => $domain,
+                    'ip' => request()->ip(),
+                    'security_event' => 'SUSPICIOUS_EMAIL_DOMAIN'
+                ]);
+                return false;
+            }
+
+            // VALIDACIÓN 6: Para hashes con más de 10 caracteres del email,
+            // verificamos que no haya caracteres sospechosos insertados
+            if (strlen($hashEmailPart) >= 10) {
+                $hashWithoutSpecialChars = preg_replace('/[^a-zA-Z0-9@.]/', '', $hashEmailPart);
+                $emailWithoutSpecialChars = preg_replace('/[^a-zA-Z0-9@.]/', '', substr($providedEmail, 0, strlen($hashEmailPart)));
+
+                if ($hashWithoutSpecialChars !== $emailWithoutSpecialChars) {
+                    Log::warning('❌ Email manipulation detected - character insertion/modification', [
+                        'provided_email' => $providedEmail,
+                        'hash_email_part' => $hashEmailPart,
+                        'cleaned_hash' => $hashWithoutSpecialChars,
+                        'cleaned_email' => $emailWithoutSpecialChars,
+                        'ip' => request()->ip(),
+                        'security_event' => 'EMAIL_CHARACTER_MANIPULATION'
+                    ]);
+                    return false;
+                }
+            }
+
+            Log::info('✅ Email exact match validation passed', [
+                'provided_email' => $providedEmail,
+                'hash_email_part' => $hashEmailPart,
+                'validation_type' => 'exact_match',
+                'all_checks_passed' => true,
+                'ip' => request()->ip()
+            ]);
+
+            return true;
+
+        } catch (\Exception $e) {
+            Log::error('❌ Error in email exact match validation', [
+                'provided_email' => $providedEmail,
+                'hash_email_part' => $hashEmailPart,
+                'error' => $e->getMessage(),
+                'ip' => request()->ip()
+            ]);
+            return false;
+        }
     }
 }

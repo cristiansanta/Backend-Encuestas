@@ -219,8 +219,30 @@ class NotificationSurvaysController extends Controller
         $asunto = $data['asunto'] ?? 'Invitación a Encuesta';
         $body = $data['cuerpo'] ?? '';
 
+        // VALIDACIÓN CRÍTICA: Verificar que el body no esté vacío
+        if (empty($body) || strlen(trim($body)) < 50) {
+            \Log::error('🚨 BODY VACÍO DETECTADO - Rechazando inserción:', [
+                'email' => $validatedData['email'],
+                'survey_id' => $validatedData['id_survey'],
+                'body_length' => strlen($body),
+                'body_content' => substr($body, 0, 200),
+                'full_data' => $data
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error: El contenido del correo está vacío. No se puede enviar una notificación sin contenido.',
+                'error_type' => 'EMPTY_BODY_VALIDATION',
+                'debug_info' => [
+                    'body_length' => strlen($body),
+                    'has_cuerpo_field' => isset($data['cuerpo']),
+                    'available_fields' => array_keys($data)
+                ]
+            ], 400);
+        }
+
         // DEBUG: Log específico para verificar asignación de variables
-        \Log::info('🔧 Variables antes de insertar:', [
+        \Log::info('🔧 Variables antes de insertar (BODY VÁLIDO):', [
             'asunto_var' => $asunto,
             'asunto_length' => strlen($asunto),
             'body_var' => substr($body, 0, 100) . '...', // Primeros 100 caracteres

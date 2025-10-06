@@ -202,47 +202,36 @@ class SurveyEmailController extends Controller
                 ]);
             }
 
-            // Si no existe notificación, crear una nueva (caso directo de generación de link)
-            if (!$notification) {
-                $notification = NotificationSurvaysModel::create([
-                    'data' => json_encode([
-                        'survey_id' => (int)$data['survey_id'],
-                        'respondent_name' => $data['respondent_name'] ?? null,
-                        'type' => 'email_survey_access',
-                        'token_issued_at' => Carbon::now()->toISOString(),
-                        'unique_token' => $tokenData['unique_id']
-                    ]),
-                    'state' => 'sent',
-                    'state_results' => 'false',
-                    'date_insert' => Carbon::now(),
-                    'id_survey' => (int)$data['survey_id'],
-                    'destinatario' => (string)$data['email'], // Usar nuevo campo destinatario
-                    'asunto' => 'Encuesta ' . $survey->title, // Agregar asunto con nombre de la encuesta
-                    'body' => '', // Body vacío para este caso
-                    'expired_date' => $survey->end_date ? Carbon::parse($survey->end_date) : Carbon::now()->addDays(30),
-                    'respondent_name' => $data['respondent_name'] ?? null,
-                    'scheduled_at' => Carbon::now() // Envío inmediato
+            // CRÍTICO: No crear notificación aquí, solo generar token
+            // Las notificaciones con contenido se crean en NotificationSurvaysController
+            // Aquí solo registramos que se generó un token de acceso
+            \Log::info('🔐 SurveyEmailController: Generando solo token, NO creando notificación con body vacío', [
+                'survey_id' => (int)$data['survey_id'],
+                'email' => $data['email'],
+                'reason' => 'Evitar body vacío - notificación se creará en NotificationSurvaysController'
+            ]);
+
+            // No crear notificación aquí para evitar registros con body vacío
+            $notification = null;
+
+            // SINCRONIZAR: Crear registro en survey_respondents para tracking
+            $existingRespondent = SurveyRespondentModel::where('survey_id', $data['survey_id'])
+                ->where('respondent_email', $data['email'])
+                ->first();
+
+            if (!$existingRespondent) {
+                // Crear token único para el correo
+                $emailToken = Str::random(64);
+
+                SurveyRespondentModel::create([
+                    'survey_id' => $data['survey_id'],
+                    'respondent_name' => $data['respondent_name'] ?? $this->extractNameFromEmail($data['email']),
+                    'respondent_email' => $data['email'],
+                    'status' => 'Pendiente', // Cambiado a Pendiente ya que no se ha enviado el correo aún
+                    'sent_at' => null, // Se actualiza cuando se envíe el correo real
+                    'notification_id' => null, // Se asigna cuando se cree la notificación real
+                    'email_token' => $emailToken
                 ]);
-
-                // SINCRONIZAR: Crear registro en survey_respondents solo si no existe notificación previa
-                $existingRespondent = SurveyRespondentModel::where('survey_id', $data['survey_id'])
-                    ->where('respondent_email', $data['email'])
-                    ->first();
-
-                if (!$existingRespondent) {
-                    // Crear token único para el correo
-                    $emailToken = Str::random(64);
-
-                    SurveyRespondentModel::create([
-                        'survey_id' => $data['survey_id'],
-                        'respondent_name' => $data['respondent_name'] ?? $this->extractNameFromEmail($data['email']),
-                        'respondent_email' => $data['email'],
-                        'status' => 'Enviada',
-                        'sent_at' => now(),
-                        'notification_id' => $notification->id,
-                        'email_token' => $emailToken
-                    ]);
-                }
             }
 
             // Generar la URL de la encuesta
@@ -910,6 +899,54 @@ class SurveyEmailController extends Controller
                 'success' => false,
                 'message' => 'Error interno al enviar recordatorio',
                 'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Generar hash válido para URLs manuales
+     */
+    public function generateValidHash(Request $request)
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'survey_id' => 'required|integer',
+                'email' => 'required|email',
+                'type' => 'string|in:standard,fallback,reminder'
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Parámetros inválidos',
+                    'errors' => $validator->errors()
+                ], 400);
+            }
+
+            $surveyId = $request->input('survey_id');
+            $email = $request->input('email');
+            $type = $request->input('type', 'standard');
+
+            // Generar hash usando el servicio oficial
+            $hash = \App\Services\URLIntegrityService::generateHash($surveyId, $email, $type);
+
+            return response()->json([
+                'success' => true,
+                'hash' => $hash,
+                'survey_id' => $surveyId,
+                'email' => $email,
+                'type' => $type
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('Error generando hash válido:', [
+                'error' => $e->getMessage(),
+                'request_data' => $request->all()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error interno al generar hash'
             ], 500);
         }
     }

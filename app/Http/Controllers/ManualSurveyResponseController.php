@@ -321,8 +321,19 @@ class ManualSurveyResponseController extends Controller
                     ], 401);
                 }
 
-                // Validar hash de integridad y obtener resultado detallado
+                // Validar hash de integridad: primero intentar validación compleja, luego simple
                 $hashValidationResult = URLIntegrityService::validateHashWithDetails($surveyId, $email, $hash);
+
+                // Si la validación compleja falla, intentar validación simple (backward compatibility)
+                if (!$hashValidationResult['valid']) {
+                    \Log::info('🔄 Validación compleja falló, intentando validación simple:', [
+                        'survey_id' => $surveyId,
+                        'email' => $email,
+                        'complex_error' => $hashValidationResult['error_type'] ?? 'unknown'
+                    ]);
+
+                    $hashValidationResult = URLIntegrityService::validateSimpleHash($surveyId, $email, $hash);
+                }
 
                 if (!$hashValidationResult['valid']) {
                     $errorType = $hashValidationResult['error_type'] ?? 'invalid_url';
