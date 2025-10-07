@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Log;
 
 class NotificationSurvaysModel extends Model
 {
@@ -90,6 +91,92 @@ class NotificationSurvaysModel extends Model
     public function survey()
     {
         return $this->belongsTo(SurveyModel::class, 'id_survey');
+    }
+
+    /**
+     * Boot method - Define model events
+     */
+    protected static function boot()
+    {
+        parent::boot();
+
+        // Evento que se ejecuta cuando se elimina una notificación
+        static::deleted(function ($notification) {
+            self::cleanupSurveyAccessTokens($notification);
+        });
+
+        // Evento que se ejecuta cuando se elimina una notificación por query builder
+        static::deleting(function ($notification) {
+            self::cleanupSurveyAccessTokens($notification);
+        });
+    }
+
+    /**
+     * Limpiar tokens de acceso relacionados cuando se elimina una notificación
+     */
+    protected static function cleanupSurveyAccessTokens($notification)
+    {
+        try {
+            // Obtener información de la notificación antes de eliminarla
+            $surveyId = $notification->id_survey;
+            $email = $notification->destinatario;
+
+            if ($surveyId && $email) {
+                // Eliminar tokens de acceso relacionados con esta combinación survey/email
+                $deletedTokens = \App\Models\SurveyAccessToken::where('survey_id', $surveyId)
+                    ->where('email', $email)
+                    ->delete();
+
+                if ($deletedTokens > 0) {
+                    try {
+                        Log::info('🧹 CLEANUP: Survey access tokens automatically cleaned', [
+                            'survey_id' => $surveyId,
+                            'email' => $email,
+                            'tokens_deleted' => $deletedTokens,
+                            'trigger' => 'notification_deleted'
+                        ]);
+                    } catch (\Exception $logError) {
+                        // Continuar aunque falle el logging
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error('❌ Error cleaning up survey access tokens', [
+                'error' => $e->getMessage(),
+                'notification_id' => $notification->id ?? 'unknown'
+            ]);
+        }
+    }
+
+    /**
+     * Método público para limpiar tokens de una encuesta completa
+     * Útil para eliminaciones masivas o limpieza manual
+     */
+    public static function cleanupSurveyTokens($surveyId)
+    {
+        try {
+            $deletedTokens = \App\Models\SurveyAccessToken::where('survey_id', $surveyId)->delete();
+
+            if ($deletedTokens > 0) {
+                try {
+                    Log::info('🧹 CLEANUP: All survey access tokens cleaned for survey', [
+                        'survey_id' => $surveyId,
+                        'tokens_deleted' => $deletedTokens,
+                        'trigger' => 'manual_cleanup'
+                    ]);
+                } catch (\Exception $logError) {
+                    // Continuar aunque falle el logging
+                }
+            }
+
+            return $deletedTokens;
+        } catch (\Exception $e) {
+            Log::error('❌ Error cleaning up survey tokens', [
+                'error' => $e->getMessage(),
+                'survey_id' => $surveyId
+            ]);
+            return 0;
+        }
     }
 }
 

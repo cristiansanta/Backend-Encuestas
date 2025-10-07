@@ -376,6 +376,58 @@ class ManualSurveyResponseController extends Controller
                     'email' => $email,
                     'ip' => $request->ip()
                 ]);
+
+                // VALIDACIÓN CRÍTICA: Verificar que el enlace no haya sido compartido entre dispositivos
+                $deviceValidationResult = URLIntegrityService::validateDeviceAccess($surveyId, $email, $hash);
+
+                if (!$deviceValidationResult['valid']) {
+                    $errorType = $deviceValidationResult['error_type'] ?? 'unknown';
+
+                    switch ($errorType) {
+                        case 'link_sharing':
+                            \Log::warning('🚨 LINK SHARING BLOCKED', [
+                                'survey_id' => $surveyId,
+                                'email' => $email,
+                                'ip' => $request->ip(),
+                                'user_agent' => $request->userAgent()
+                            ]);
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Este enlace no puede ser compartido. Cada enlace es personal e intransferible.',
+                                'error_type' => 'link_sharing'
+                            ], 403);
+
+                        case 'link_blocked':
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Este enlace ha sido bloqueado por motivos de seguridad.',
+                                'error_type' => 'link_blocked'
+                            ], 403);
+
+                        default:
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Error de validación de acceso.',
+                                'error_type' => 'validation_error'
+                            ], 500);
+                    }
+                }
+
+                if ($deviceValidationResult['is_first_access']) {
+                    \Log::info('🔐 First device access registered', [
+                        'survey_id' => $surveyId,
+                        'email' => $email,
+                        'access_token_id' => $deviceValidationResult['access_token_id'],
+                        'ip' => $request->ip()
+                    ]);
+                } else {
+                    \Log::info('✅ Returning device access validated', [
+                        'survey_id' => $surveyId,
+                        'email' => $email,
+                        'access_token_id' => $deviceValidationResult['access_token_id'],
+                        'ip' => $request->ip()
+                    ]);
+                }
             }
 
             // Verificar que la encuesta existe

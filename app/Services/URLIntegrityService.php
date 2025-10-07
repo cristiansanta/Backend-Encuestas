@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
+use App\Models\SurveyAccessToken;
 
 class URLIntegrityService
 {
@@ -58,24 +59,22 @@ class URLIntegrityService
     {
         $request = request();
 
-        // Recopilar información del dispositivo/sesión
+        // ESTRATEGIA SIMPLIFICADA: Solo usar datos estables
+        // IP + User-Agent son suficientes para detectar dispositivos diferentes
+        // pero evitan problemas con headers variables
         $fingerprintData = [
             'ip' => $request->ip(),
-            'user_agent' => $request->userAgent(),
-            'accept_language' => $request->header('Accept-Language', 'unknown'),
-            'accept_encoding' => $request->header('Accept-Encoding', 'unknown'),
-            'session_id' => session()->getId(),
-            // Agregar timestamp del día para renovación diaria
-            'day' => date('Y-m-d')
+            'user_agent' => $request->userAgent()
         ];
 
         // Generar hash único del dispositivo
         $fingerprintString = implode('|', $fingerprintData);
         $fingerprint = substr(hash('sha256', $fingerprintString), 0, 8);
 
-        Log::info('🔍 Device fingerprint generated', [
+        Log::info('🔍 Device fingerprint generated (simplified)', [
             'fingerprint' => $fingerprint,
             'ip' => $fingerprintData['ip'],
+            'user_agent_length' => strlen($fingerprintData['user_agent']),
             'user_agent_hash' => substr(hash('sha256', $fingerprintData['user_agent']), 0, 8)
         ]);
 
@@ -1390,6 +1389,112 @@ class URLIntegrityService
                 'ip' => request()->ip()
             ]);
             return false;
+        }
+    }
+
+    /**
+     * Validar acceso por dispositivo para prevenir compartir enlaces
+     * CRÍTICO: Registra el primer acceso y verifica que accesos posteriores sean del mismo dispositivo
+     *
+     * @param int $surveyId
+     * @param string $email
+     * @param string $providedHash
+     * @return array
+     */
+    public static function validateDeviceAccess($surveyId, $email, $providedHash)
+    {
+        try {
+            $decodedEmail = urldecode($email);
+            $currentFingerprint = self::generateDeviceFingerprint();
+            $request = request();
+
+            // Buscar si ya existe un registro de acceso para este enlace
+            $accessToken = SurveyAccessToken::where('survey_id', $surveyId)
+                ->where('email', $decodedEmail)
+                ->where('hash', $providedHash)
+                ->first();
+
+            if (!$accessToken) {
+                // PRIMER ACCESO: Registrar este dispositivo como el autorizado
+                $accessToken = SurveyAccessToken::registerFirstAccess(
+                    $surveyId,
+                    $decodedEmail,
+                    $providedHash,
+                    $currentFingerprint,
+                    $request->ip(),
+                    $request->userAgent()
+                );
+
+                Log::info('🔐 FIRST ACCESS: Device registered for survey link', [
+                    'survey_id' => $surveyId,
+                    'email' => $decodedEmail,
+                    'device_fingerprint' => $currentFingerprint,
+                    'ip' => $request->ip(),
+                    'access_token_id' => $accessToken->id
+                ]);
+
+                return ['valid' => true, 'is_first_access' => true, 'access_token_id' => $accessToken->id];
+            }
+
+            // ACCESO POSTERIOR: Verificar que sea el mismo dispositivo
+            if ($accessToken->status === 'blocked') {
+                Log::warning('❌ BLOCKED: Access attempt to blocked survey link', [
+                    'survey_id' => $surveyId,
+                    'email' => $decodedEmail,
+                    'current_fingerprint' => $currentFingerprint,
+                    'registered_fingerprint' => $accessToken->device_fingerprint,
+                    'ip' => $request->ip(),
+                    'access_token_id' => $accessToken->id
+                ]);
+                return ['valid' => false, 'error_type' => 'link_blocked'];
+            }
+
+            if (!$accessToken->isDeviceMatch($currentFingerprint)) {
+                // INTENTO DE COMPARTIR ENLACE DETECTADO
+                Log::warning('❌ CRITICAL: Link sharing detected - Different device attempting access', [
+                    'survey_id' => $surveyId,
+                    'email' => $decodedEmail,
+                    'original_device' => $accessToken->device_fingerprint,
+                    'current_device' => $currentFingerprint,
+                    'original_ip' => $accessToken->ip_address,
+                    'current_ip' => $request->ip(),
+                    'original_user_agent' => substr($accessToken->user_agent, 0, 100),
+                    'current_user_agent' => substr($request->userAgent(), 0, 100),
+                    'first_access_at' => $accessToken->first_access_at,
+                    'access_count' => $accessToken->access_count,
+                    'security_event' => 'LINK_SHARING_DETECTED',
+                    'access_token_id' => $accessToken->id
+                ]);
+
+                // Bloquear el enlace para prevenir futuros intentos
+                $accessToken->blockAccess();
+
+                return ['valid' => false, 'error_type' => 'link_sharing'];
+            }
+
+            // ACCESO VÁLIDO: Actualizar estadísticas
+            $accessToken->updateAccess();
+
+            Log::info('✅ Valid device access to survey link', [
+                'survey_id' => $surveyId,
+                'email' => $decodedEmail,
+                'device_fingerprint' => $currentFingerprint,
+                'ip' => $request->ip(),
+                'access_count' => $accessToken->access_count + 1,
+                'access_token_id' => $accessToken->id
+            ]);
+
+            return ['valid' => true, 'is_first_access' => false, 'access_token_id' => $accessToken->id];
+
+        } catch (\Exception $e) {
+            Log::error('❌ Device access validation error', [
+                'survey_id' => $surveyId,
+                'email' => $email,
+                'provided_hash' => $providedHash,
+                'error' => $e->getMessage(),
+                'ip' => request()->ip()
+            ]);
+            return ['valid' => false, 'error_type' => 'validation_error'];
         }
     }
 }
