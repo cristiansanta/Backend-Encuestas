@@ -97,7 +97,8 @@ class URLIntegrityService
             $decodedEmail = urldecode($email);
 
             // Validar formato básico del hash
-            if (strlen($providedHash) < 8 || strlen($providedHash) > 32) {
+            // Aumentado a 50 para soportar hashes con timestamp: base64(surveyId-email-timestamp)
+            if (strlen($providedHash) < 8 || strlen($providedHash) > 50) {
                 Log::warning('❌ Simple hash validation failed - Invalid length', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
@@ -107,8 +108,8 @@ class URLIntegrityService
                 return ['valid' => false, 'error_type' => 'invalid_format'];
             }
 
-            // Validar que el hash tenga caracteres válidos (alfanuméricos + URL-safe chars para MD5 format)
-            if (!preg_match('/^[a-zA-Z0-9_-]{8,32}$/', $providedHash)) {
+            // Validar que el hash tenga caracteres válidos (alfanuméricos + URL-safe chars)
+            if (!preg_match('/^[a-zA-Z0-9_-]{8,50}$/', $providedHash)) {
                 Log::warning('❌ Simple hash validation failed - Invalid characters', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
@@ -234,12 +235,16 @@ class URLIntegrityService
                 return ['valid' => false, 'error_type' => 'invalid_format'];
             }
 
-            // COMPATIBILIDAD: Manejar tanto hashes nuevos (HMAC) como antiguos (base64 simple)
-            if (strlen($providedHash) >= 40) {
-                // Hash nuevo (HMAC) - usar validación HMAC
+            // COMPATIBILIDAD: Distinguir entre HMAC y hash legacy simple
+            $testDecode = @base64_decode(strtr($providedHash, '-_', '+/'));
+
+            // HMAC tiene formato: surveyId.deviceFingerprint.timestamp (múltiples puntos como separadores)
+            // Legacy tiene formato: surveyId-email o surveyId-email-timestamp (guiones como separadores)
+            if ($testDecode && preg_match('/^\d+\.\w+\.\d+/', $testDecode)) {
+                // Hash nuevo (HMAC) - patrón número.string.número
                 return self::validateHMACHashWithDetails($surveyId, $decodedEmail, $providedHash);
             } else {
-                // Hash antiguo (base64 simple) - usar validación antigua pero estricta
+                // Hash antiguo (base64 simple) - puede incluir timestamp
                 return self::validateLegacyHashWithDetails($surveyId, $decodedEmail, $providedHash);
             }
 
@@ -291,12 +296,16 @@ class URLIntegrityService
                 return false;
             }
 
-            // COMPATIBILIDAD: Manejar tanto hashes nuevos (HMAC) como antiguos (base64 simple)
-            if (strlen($providedHash) >= 40) {
-                // Hash nuevo (HMAC) - usar validación HMAC
+            // COMPATIBILIDAD: Distinguir entre HMAC y hash legacy simple
+            $testDecode = @base64_decode(strtr($providedHash, '-_', '+/'));
+
+            // HMAC tiene formato: surveyId.deviceFingerprint.timestamp (múltiples puntos como separadores)
+            // Legacy tiene formato: surveyId-email o surveyId-email-timestamp (guiones como separadores)
+            if ($testDecode && preg_match('/^\d+\.\w+\.\d+/', $testDecode)) {
+                // Hash nuevo (HMAC) - patrón número.string.número
                 return self::validateHMACHash($surveyId, $decodedEmail, $providedHash);
             } else {
-                // Hash antiguo (base64 simple) - usar validación antigua pero estricta
+                // Hash antiguo (base64 simple) - puede incluir timestamp
                 return self::validateLegacyHash($surveyId, $decodedEmail, $providedHash);
             }
 
@@ -635,10 +644,11 @@ class URLIntegrityService
                 'email' => $decodedEmail
             ]);
 
-            // FORMATO MUY ANTIGUO: surveyId-emailParcial (sin timestamp)
-            if (preg_match('/^(\d+)-(.+)$/', $decodedHash, $matches)) {
+            // FORMATO: surveyId-email o surveyId-email-timestamp
+            if (preg_match('/^(\d+)-(.+?)(?:-(\d+))?$/', $decodedHash, $matches)) {
                 $hashSurveyId = $matches[1];
                 $hashEmailPart = $matches[2];
+                $hashTimestamp = $matches[3] ?? null; // Timestamp opcional
 
                 // Verificar que el survey ID coincida
                 if ($hashSurveyId != $surveyId) {
@@ -813,10 +823,11 @@ class URLIntegrityService
                 'email' => $decodedEmail
             ]);
 
-            // FORMATO MUY ANTIGUO: surveyId-emailParcial (sin timestamp)
-            if (preg_match('/^(\d+)-(.+)$/', $decodedHash, $matches)) {
+            // FORMATO: surveyId-email o surveyId-email-timestamp
+            if (preg_match('/^(\d+)-(.+?)(?:-(\d+))?$/', $decodedHash, $matches)) {
                 $hashSurveyId = $matches[1];
                 $hashEmailPart = $matches[2];
+                $hashTimestamp = $matches[3] ?? null; // Timestamp opcional
 
                 // Verificar que el survey ID coincida
                 if ($hashSurveyId != $surveyId) {
@@ -1125,6 +1136,18 @@ class URLIntegrityService
     private static function validateLegacyEmailIntegrity($providedEmail, $hashEmailPart)
     {
         try {
+            // VALIDACIÓN PRIORITARIA: Si el email y el hashEmailPart son EXACTAMENTE iguales,
+            // es un hash que contiene el email completo - validación directa
+            if ($providedEmail === $hashEmailPart) {
+                Log::info('✅ Email matches hash part exactly - full email in hash', [
+                    'provided_email' => $providedEmail,
+                    'hash_email_part' => $hashEmailPart,
+                    'validation_type' => 'exact_full_email_match',
+                    'ip' => request()->ip()
+                ]);
+                return true;
+            }
+
             // VALIDACIÓN 1: El email debe comenzar exactamente con la parte del hash
             if (strpos($providedEmail, $hashEmailPart) !== 0) {
                 Log::warning('❌ Email does not start with hash part', [
@@ -1520,6 +1543,13 @@ class URLIntegrityService
     /**
      * Resetear/limpiar tokens de acceso cuando se reenvía una encuesta
      * Esto permite que el nuevo hash generado pueda ser usado sin restricciones
+     * IMPORTANTE: Solo elimina tokens ACTIVOS, mantiene los BLOQUEADOS
+     *
+     * Razón:
+     * - Cada reenvío genera un hash ÚNICO con timestamp
+     * - Hash viejo bloqueado → Permanece bloqueado (registro independiente)
+     * - Hash nuevo → Funcionará sin problemas (nuevo registro cuando usuario acceda)
+     * - Solo limpiamos tokens activos para evitar residuos
      *
      * @param int $surveyId
      * @param string $email
@@ -1530,12 +1560,12 @@ class URLIntegrityService
         try {
             $decodedEmail = urldecode($email);
 
-            Log::info('🔄 RESEND: Clearing access tokens for survey resend', [
+            Log::info('🔄 RESEND: Clearing active access tokens for survey resend', [
                 'survey_id' => $surveyId,
                 'email' => $decodedEmail
             ]);
 
-            // CRÍTICO: Solo eliminar tokens activos/válidos, PRESERVAR tokens bloqueados por seguridad
+            // Obtener información de tokens antes de eliminar
             $existingTokens = SurveyAccessToken::where('survey_id', $surveyId)
                 ->where('email', $decodedEmail)
                 ->get();
@@ -1547,21 +1577,26 @@ class URLIntegrityService
                 'total_tokens' => $existingTokens->count(),
                 'blocked_tokens' => $blockedTokens->count(),
                 'active_tokens' => $activeTokens->count(),
-                'blocked_hashes' => $blockedTokens->pluck('hash')->toArray()
+                'blocked_hashes' => $blockedTokens->pluck('hash')->toArray(),
+                'active_hashes' => $activeTokens->pluck('hash')->toArray(),
+                'action' => 'Deleting ONLY active tokens, preserving blocked (each hash is unique)'
             ]);
 
-            // Solo eliminar tokens activos/válidos, mantener los bloqueados
+            // CRÍTICO: Solo eliminar tokens ACTIVOS, mantener los BLOQUEADOS
+            // Razón: Con hashes únicos (timestamp), cada enlace tiene su propio registro
+            // Hash viejo bloqueado permanece bloqueado, hash nuevo es independiente
             $deletedCount = SurveyAccessToken::where('survey_id', $surveyId)
                 ->where('email', $decodedEmail)
-                ->whereNotIn('status', ['blocked'])
+                ->where('status', '!=', 'blocked')
                 ->delete();
 
-            Log::info('✅ RESEND: Access tokens cleared successfully', [
+            Log::info('✅ RESEND: Active tokens cleared, blocked tokens preserved', [
                 'survey_id' => $surveyId,
                 'email' => $decodedEmail,
                 'deleted_active_tokens' => $deletedCount,
                 'preserved_blocked_tokens' => $blockedTokens->count(),
-                'security_note' => 'Blocked tokens preserved for security'
+                'preserved_blocked_hashes' => $blockedTokens->pluck('hash')->toArray(),
+                'security_note' => 'New hash (with timestamp) will have independent lifecycle'
             ]);
 
             return true;

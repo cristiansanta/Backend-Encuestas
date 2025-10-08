@@ -321,19 +321,17 @@ class ManualSurveyResponseController extends Controller
                     ], 401);
                 }
 
-                // Validar hash de integridad: primero intentar validación compleja, luego simple
+                // Validar hash de integridad
+                // validateHashWithDetails ya maneja tanto HMAC como legacy (con/sin timestamp)
                 $hashValidationResult = URLIntegrityService::validateHashWithDetails($surveyId, $email, $hash);
 
-                // Si la validación compleja falla, intentar validación simple (backward compatibility)
-                if (!$hashValidationResult['valid']) {
-                    \Log::info('🔄 Validación compleja falló, intentando validación simple:', [
-                        'survey_id' => $surveyId,
-                        'email' => $email,
-                        'complex_error' => $hashValidationResult['error_type'] ?? 'unknown'
-                    ]);
-
-                    $hashValidationResult = URLIntegrityService::validateSimpleHash($surveyId, $email, $hash);
-                }
+                \Log::info('🔍 Hash validation result:', [
+                    'survey_id' => $surveyId,
+                    'email' => $email,
+                    'hash_length' => strlen($hash),
+                    'valid' => $hashValidationResult['valid'],
+                    'error_type' => $hashValidationResult['error_type'] ?? 'none'
+                ]);
 
                 if (!$hashValidationResult['valid']) {
                     $errorType = $hashValidationResult['error_type'] ?? 'invalid_url';

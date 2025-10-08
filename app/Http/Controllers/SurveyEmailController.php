@@ -234,6 +234,15 @@ class SurveyEmailController extends Controller
                 ]);
             }
 
+            // CRÍTICO: Limpiar tokens bloqueados anteriores para este survey+email
+            // Esto permite que el nuevo enlace funcione, mientras los enlaces viejos permanecen bloqueados
+            \App\Services\URLIntegrityService::resetAccessTokensForResend($data['survey_id'], $data['email']);
+
+            \Log::info('🔄 Access tokens cleaned for new link generation', [
+                'survey_id' => $data['survey_id'],
+                'email' => $data['email']
+            ]);
+
             // Generar la URL de la encuesta con formato email+hash (compatible con sistema existente)
             // Crear hash similar al sistema de validación existente
             $baseHash = $data['survey_id'] . '-' . $data['email'];

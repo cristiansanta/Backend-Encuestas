@@ -312,6 +312,15 @@ class NotificationSurvaysController extends Controller
             'id_survey' => $dataToInsert['id_survey']
         ]);
 
+        // CRÍTICO: Limpiar tokens bloqueados anteriores para este survey+email
+        // Esto permite que los nuevos enlaces funcionen sin bloqueos previos
+        URLIntegrityService::resetAccessTokensForResend($validatedData['id_survey'], $validatedData['email']);
+
+        \Log::info('🔄 Access tokens cleaned before creating notification', [
+            'survey_id' => $validatedData['id_survey'],
+            'email' => $validatedData['email']
+        ]);
+
         // Crear registro con nueva estructura optimizada
         $record = NotificationSurvaysModel::create($dataToInsert);
 
@@ -808,36 +817,25 @@ class NotificationSurvaysController extends Controller
                         }
                     }
 
-                    // CRÍTICO: Generar hash único para reenvío que sea diferente a hashes bloqueados
-                    // Verificar si hay hashes bloqueados existentes para este usuario
-                    $existingTokens = \App\Models\SurveyAccessToken::where('survey_id', $surveyId)
-                        ->where('email', $email)
-                        ->pluck('hash')
-                        ->toArray();
+                    // CRÍTICO: Generar hash ÚNICO para cada reenvío con timestamp
+                    // Esto permite que cada enlace tenga su propio registro independiente
+                    // Hash viejo bloqueado → Permanece bloqueado
+                    // Hash nuevo → Funciona sin restricciones
 
-                    // Generar hash base compacto usando MD5 (22 chars) - compatible con validador de 32 chars
-                    $md5Hash = md5($surveyId . '-' . $email);
-                    $baseHash = rtrim(base64_encode(hex2bin($md5Hash)), '=');
-                    $baseHash = str_replace(['+', '/'], ['-', '_'], $baseHash); // URL-safe
+                    // Formato: base64(surveyId-email-timestamp_corto)
+                    $timestamp = substr((string)time(), -6); // Últimos 6 dígitos del timestamp
+                    $baseHashData = $surveyId . '-' . $email . '-' . $timestamp;
+                    $newHash = base64_encode($baseHashData);
+                    $newHash = str_replace(['+', '/', '='], ['', '', ''], $newHash); // URL-safe
 
-                    // Si el hash base no está bloqueado, usarlo directamente
-                    if (!in_array($baseHash, $existingTokens)) {
-                        $newHash = $baseHash;
-                    } else {
-                        // Si está bloqueado, agregar sufijo corto único (mantener longitud bajo 32 chars)
-                        $attempt = 1;
-                        do {
-                            $suffix = base_convert(time() + $attempt, 10, 36); // Base36 para compactness
-                            $newHash = $baseHash . substr($suffix, -6); // Hasta 28 chars total (22 + 6)
-                            $attempt++;
-                        } while (in_array($newHash, $existingTokens) && $attempt < 100);
-
-                        if ($attempt >= 100) {
-                            // Fallback: usar solo timestamp base36
-                            $newHash = $baseHash . base_convert(time(), 10, 36);
-                            $newHash = substr($newHash, 0, 32); // Forzar límite de 32 chars
-                        }
-                    }
+                    \Log::info('🔄 RESEND: Generated unique timestamped hash', [
+                        'survey_id' => $surveyId,
+                        'email' => $email,
+                        'timestamp' => $timestamp,
+                        'hash_data' => $baseHashData,
+                        'generated_hash' => $newHash,
+                        'note' => 'Each resend gets unique hash to maintain independent block status'
+                    ]);
 
                     // Reemplazar cualquier hash anterior en el cuerpo del email
                     $oldHashes = [
@@ -954,49 +952,15 @@ class NotificationSurvaysController extends Controller
                     ]);
                 }
 
-                // CRÍTICO: Registrar el nuevo hash único en survey_access_tokens para validación
-                try {
-                    // Extraer el hash del email body generado (incluyendo caracteres URL-safe)
-                    if (preg_match('/&hash=([a-zA-Z0-9_-]+)/', $data['cuerpo'], $matches)) {
-                        $newHashFromEmail = $matches[1];
-
-                        // Registrar el nuevo hash como válido en la tabla
-                        $accessToken = \App\Models\SurveyAccessToken::create([
-                            'survey_id' => $surveyId,
-                            'email' => $email,
-                            'hash' => $newHashFromEmail,
-                            'status' => 'active',
-                            'first_access_at' => now(),
-                            'access_count' => 0,
-                            'device_fingerprint' => 'resend-generated',
-                            'ip_address' => request()->ip() ?? '127.0.0.1',
-                            'user_agent' => 'Resend System',
-                            'created_at' => now(),
-                            'updated_at' => now()
-                        ]);
-
-                        \Log::info('✅ RESEND: New hash registered in survey_access_tokens', [
-                            'survey_id' => $surveyId,
-                            'email' => $email,
-                            'new_hash' => $newHashFromEmail,
-                            'access_token_id' => $accessToken->id,
-                            'security_note' => 'Resend hash validated and ready for use'
-                        ]);
-                    } else {
-                        \Log::warning('⚠️ RESEND: Could not extract hash from email body for registration', [
-                            'survey_id' => $surveyId,
-                            'email' => $email,
-                            'body_length' => strlen($data['cuerpo'])
-                        ]);
-                    }
-                } catch (\Exception $hashException) {
-                    \Log::error('❌ RESEND: Error registering new hash in survey_access_tokens', [
-                        'survey_id' => $surveyId,
-                        'email' => $email,
-                        'error' => $hashException->getMessage(),
-                        'note' => 'Hash registration failed but notification was created successfully'
-                    ]);
-                }
+                // NO pre-registrar el token aquí
+                // Razón: El sistema validateDeviceAccess() creará el token automáticamente
+                // cuando el usuario REAL acceda al enlace con su dispositivo REAL.
+                // Pre-registrar con device_fingerprint falso causa que se bloquee el enlace nuevo.
+                \Log::info('✅ RESEND: New hash will register on first user access', [
+                    'survey_id' => $surveyId,
+                    'email' => $email,
+                    'security_note' => 'Token will be created when user opens link with real device'
+                ]);
             } catch (\Exception $e) {
                 \Log::error('🔄 RESEND SURVEY: Error updating/creating notification', [
                     'error' => $e->getMessage(),
