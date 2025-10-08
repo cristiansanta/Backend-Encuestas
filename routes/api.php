@@ -192,6 +192,7 @@ Route::middleware(['debug.auth', 'auth:sanctum'])->group(function () {
         Route::get('/download-respondents-template', 'downloadRespondentsTemplate')->name('Notification.downloadRespondentsTemplate');
         Route::post('/generate-email-links', 'generateSurveyEmailLinks')->name('Notification.generateEmailLinks');
         Route::post('/survey-status', 'getSurveyNotificationStatus')->name('Notification.surveyStatus');
+        Route::post('/resend-survey', 'resendSurveyToUser')->name('Notification.resendSurvey');
     });
 
 

@@ -107,8 +107,8 @@ class URLIntegrityService
                 return ['valid' => false, 'error_type' => 'invalid_format'];
             }
 
-            // Validar que el hash tenga caracteres alfanuméricos válidos
-            if (!preg_match('/^[a-zA-Z0-9]{8,32}$/', $providedHash)) {
+            // Validar que el hash tenga caracteres válidos (alfanuméricos + URL-safe chars para MD5 format)
+            if (!preg_match('/^[a-zA-Z0-9_-]{8,32}$/', $providedHash)) {
                 Log::warning('❌ Simple hash validation failed - Invalid characters', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
@@ -120,27 +120,46 @@ class URLIntegrityService
 
             // Para validación simple, verificamos que sea consistente con el patrón esperado
             // CRÍTICO: Validación estricta - el hash debe corresponder exactamente al email
-            $expectedPattern = base64_encode("{$surveyId}-{$decodedEmail}");
-            $baseHash = str_replace(['+', '/', '='], '', $expectedPattern);
+
+            // Intentar formato legacy (base64)
+            $legacyPattern = base64_encode("{$surveyId}-{$decodedEmail}");
+            $legacyHash = str_replace(['+', '/', '='], '', $legacyPattern);
+
+            // Intentar formato nuevo (MD5 compacto)
+            $md5Hash = md5($surveyId . '-' . $decodedEmail);
+            $newHash = rtrim(base64_encode(hex2bin($md5Hash)), '=');
+            $newHash = str_replace(['+', '/'], ['-', '_'], $newHash); // URL-safe
 
             // SEGURIDAD CRÍTICA: El hash debe coincidir EXACTAMENTE - NO PREFIJOS
             // BLOQUEAMOS ataques de truncamiento del hash
-            if (strlen($providedHash) >= 16 && // Mínimo 16 caracteres para seguridad
-                strlen($providedHash) === strlen($baseHash) && // Longitud exacta requerida
-                hash_equals($baseHash, $providedHash)) { // Comparación segura contra timing attacks
+            $isLegacyValid = (strlen($providedHash) >= 16 && // Mínimo 16 caracteres para seguridad
+                strlen($providedHash) === strlen($legacyHash) && // Longitud exacta requerida
+                hash_equals($legacyHash, $providedHash)); // Comparación segura contra timing attacks
+
+            $isNewFormatValid = (strlen($providedHash) >= 16 && // Mínimo 16 caracteres para seguridad
+                strlen($providedHash) === strlen($newHash) && // Longitud exacta requerida
+                hash_equals($newHash, $providedHash)); // Comparación segura contra timing attacks
+
+            if ($isLegacyValid || $isNewFormatValid) {
+                $validationType = $isLegacyValid ? 'legacy_base64' : 'md5_compact';
+                $expectedHash = $isLegacyValid ? $legacyHash : $newHash;
 
                 Log::info('✅ Simple hash validation successful - EXACT MATCH', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
-                    'validation_type' => 'simple_hash_exact',
-                    'expected_hash_full' => $baseHash,
+                    'validation_type' => 'simple_hash_exact_' . $validationType,
+                    'expected_hash_full' => $expectedHash,
                     'provided_hash' => $providedHash,
                     'hash_length_match' => true,
+                    'hash_format' => $validationType,
                     'ip' => request()->ip()
                 ]);
 
                 return ['valid' => true, 'validation_type' => 'simple'];
             }
+
+            // Para los errores, usar el hash legacy como referencia para compatibilidad
+            $baseHash = $legacyHash;
 
             // Determinar el tipo específico de error de seguridad
             $securityEvent = 'EMAIL_HASH_MISMATCH';
@@ -1086,7 +1105,7 @@ class URLIntegrityService
     public static function generateSecureUrl($surveyId, $email, $type = 'standard', $baseUrl = null)
     {
         if (!$baseUrl) {
-            $baseUrl = env('FRONTEND_URL', 'http://149.130.180.163:5173');
+            $baseUrl = env('FRONTEND_URL', 'http://localhost:5173');
         }
 
         $hash = self::generateHash($surveyId, $email, $type);
@@ -1495,6 +1514,65 @@ class URLIntegrityService
                 'ip' => request()->ip()
             ]);
             return ['valid' => false, 'error_type' => 'validation_error'];
+        }
+    }
+
+    /**
+     * Resetear/limpiar tokens de acceso cuando se reenvía una encuesta
+     * Esto permite que el nuevo hash generado pueda ser usado sin restricciones
+     *
+     * @param int $surveyId
+     * @param string $email
+     * @return bool
+     */
+    public static function resetAccessTokensForResend($surveyId, $email)
+    {
+        try {
+            $decodedEmail = urldecode($email);
+
+            Log::info('🔄 RESEND: Clearing access tokens for survey resend', [
+                'survey_id' => $surveyId,
+                'email' => $decodedEmail
+            ]);
+
+            // CRÍTICO: Solo eliminar tokens activos/válidos, PRESERVAR tokens bloqueados por seguridad
+            $existingTokens = SurveyAccessToken::where('survey_id', $surveyId)
+                ->where('email', $decodedEmail)
+                ->get();
+
+            $blockedTokens = $existingTokens->where('status', 'blocked');
+            $activeTokens = $existingTokens->whereNotIn('status', ['blocked']);
+
+            Log::info('🔒 RESEND: Token analysis before cleanup', [
+                'total_tokens' => $existingTokens->count(),
+                'blocked_tokens' => $blockedTokens->count(),
+                'active_tokens' => $activeTokens->count(),
+                'blocked_hashes' => $blockedTokens->pluck('hash')->toArray()
+            ]);
+
+            // Solo eliminar tokens activos/válidos, mantener los bloqueados
+            $deletedCount = SurveyAccessToken::where('survey_id', $surveyId)
+                ->where('email', $decodedEmail)
+                ->whereNotIn('status', ['blocked'])
+                ->delete();
+
+            Log::info('✅ RESEND: Access tokens cleared successfully', [
+                'survey_id' => $surveyId,
+                'email' => $decodedEmail,
+                'deleted_active_tokens' => $deletedCount,
+                'preserved_blocked_tokens' => $blockedTokens->count(),
+                'security_note' => 'Blocked tokens preserved for security'
+            ]);
+
+            return true;
+
+        } catch (\Exception $e) {
+            Log::error('❌ RESEND: Error clearing access tokens', [
+                'survey_id' => $surveyId,
+                'email' => $email,
+                'error' => $e->getMessage()
+            ]);
+            return false;
         }
     }
 }

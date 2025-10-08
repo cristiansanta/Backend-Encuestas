@@ -212,7 +212,7 @@ class SurveyEmailController extends Controller
             ]);
 
             // No crear notificación aquí para evitar registros con body vacío
-            $notification = null;
+            // $notification permanece con el valor encontrado anteriormente o null
 
             // SINCRONIZAR: Crear registro en survey_respondents para tracking
             $existingRespondent = SurveyRespondentModel::where('survey_id', $data['survey_id'])
@@ -227,17 +227,23 @@ class SurveyEmailController extends Controller
                     'survey_id' => $data['survey_id'],
                     'respondent_name' => $data['respondent_name'] ?? $this->extractNameFromEmail($data['email']),
                     'respondent_email' => $data['email'],
-                    'status' => 'Pendiente', // Cambiado a Pendiente ya que no se ha enviado el correo aún
+                    'status' => 'Enviada', // Usar valor válido según constraint - Enviada es el estado apropiado para tokens generados
                     'sent_at' => null, // Se actualiza cuando se envíe el correo real
                     'notification_id' => null, // Se asigna cuando se cree la notificación real
                     'email_token' => $emailToken
                 ]);
             }
 
-            // Generar la URL de la encuesta
+            // Generar la URL de la encuesta con formato email+hash (compatible con sistema existente)
+            // Crear hash similar al sistema de validación existente
+            $baseHash = $data['survey_id'] . '-' . $data['email'];
+            $hash = base64_encode($baseHash);
+            // Limpiar caracteres especiales del hash para URL
+            $hash = str_replace(['+', '/', '='], ['', '', ''], $hash);
+
             $surveyUrl = config('app.frontend_url', 'http://localhost:5173') .
                         '/encuestados/survey-view-manual/' . $data['survey_id'] .
-                        '?token=' . urlencode($encryptedToken);
+                        '?email=' . urlencode($data['email']) . '&hash=' . $hash;
 
             return response()->json([
                 'success' => true,
@@ -245,7 +251,7 @@ class SurveyEmailController extends Controller
                 'data' => [
                     'survey_url' => $surveyUrl,
                     'encrypted_token' => $encryptedToken,
-                    'notification_id' => $notification->id,
+                    'notification_id' => $notification ? $notification->id : null,
                     'expires_at' => $survey->end_date ?? Carbon::now()->addDays(30)
                 ]
             ], 200);

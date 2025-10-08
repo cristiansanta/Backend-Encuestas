@@ -23,12 +23,18 @@ class SectionController extends Controller
                 return response()->json(['message' => 'Usuario no autenticado'], 401);
             }
             
-            // Filtrar secciones por encuestas del usuario autenticado
+            // Filtrar secciones por usuario autenticado (lógica de inteligencia de negocio)
+            // IMPORTANTE: Las secciones son privadas y NO se comparten con otros usuarios,
+            // independientemente del permiso "Permitir ver preguntas y categorías"
             $sections = SectionModel::where(function($query) use ($user) {
                                         $query->whereHas('survey', function($subQuery) use ($user) {
                                             $subQuery->where('user_create', $user->name);
                                         })
-                                        ->orWhereNull('id_survey'); // También incluir secciones del banco (sin encuesta específica)
+                                        ->orWhere(function($bankQuery) use ($user) {
+                                            // Solo secciones del banco del propio usuario
+                                            $bankQuery->whereNull('id_survey')
+                                                     ->where('user_create', $user->name);
+                                        });
                                     })
                                     ->orderBy('id', 'desc')
                                     ->get();
@@ -83,10 +89,17 @@ class SectionController extends Controller
 
     // Obtener todos los datos validados
     $data = $request->all();
-    
+
+    // Obtener el usuario autenticado y agregarlo a los datos
+    $user = $request->user();
+    if (!$user) {
+        return response()->json(['message' => 'Usuario no autenticado'], 401);
+    }
+    $data['user_create'] = $user->name; // Agregar el usuario creador para la lógica de inteligencia de negocio
+
     try {
         // Usar transacción para evitar problemas de concurrencia
-        return DB::transaction(function () use ($data) {
+        return DB::transaction(function () use ($data, $user) {
             // MEJORADO: Verificar si ya existe un registro con los mismos datos clave usando lógica más robusta
             $query = SectionModel::where(function($q) use ($data) {
                                     // Manejar id_survey que puede ser null para secciones banco
@@ -101,6 +114,7 @@ class SectionController extends Controller
                                     $normalizedTitle = strtolower(preg_replace('/\s+/', ' ', trim($data['title'])));
                                     $q->whereRaw('LOWER(REGEXP_REPLACE(TRIM(title), \'[[:space:]]+\', \' \', \'g\')) = ?', [$normalizedTitle]);
                                  })
+                                 ->where('user_create', $user->name) // Filtrar por usuario para la lógica de inteligencia de negocio
                                  ->lockForUpdate(); // Bloquear para evitar inserciones simultáneas
             
             $existingsections = $query->first();
@@ -148,16 +162,31 @@ class SectionController extends Controller
     /**
      * Display the specified resource.
      */
-    public function show(string $id)
+    public function show(Request $request, string $id)
     {
-        //
-        $section = SectionModel::find($id);
+        // Obtener el usuario autenticado
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Usuario no autenticado'], 401);
+        }
+
+        // Filtrar por usuario para la lógica de inteligencia de negocio
+        $section = SectionModel::where('id', $id)
+                              ->where(function($query) use ($user) {
+                                  $query->whereHas('survey', function($subQuery) use ($user) {
+                                      $subQuery->where('user_create', $user->name);
+                                  })
+                                  ->orWhere(function($bankQuery) use ($user) {
+                                      $bankQuery->whereNull('id_survey')
+                                               ->where('user_create', $user->name);
+                                  });
+                              })
+                              ->first();
+
         if ($section) {
-            return response()->json($section); // Cambiado para devolver JSON
-            //return view('surveys.show', compact('survey'));
+            return response()->json($section);
         } else {
-            return response()->json(['message' => 'No se encontró la seccion'], 404);
-            //return response()->json(['message' => 'No se encontró la encuesta'], 404);
+            return response()->json(['message' => 'No se encontró la sección o no tienes acceso a ella'], 404);
         }
     }
 
@@ -182,7 +211,25 @@ class SectionController extends Controller
      */
     public function update(Request $request, string $id)
     {
-        $section = SectionModel::find($id);
+        // Obtener el usuario autenticado
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Usuario no autenticado'], 401);
+        }
+
+        // Filtrar por usuario para la lógica de inteligencia de negocio
+        $section = SectionModel::where('id', $id)
+                              ->where(function($query) use ($user) {
+                                  $query->whereHas('survey', function($subQuery) use ($user) {
+                                      $subQuery->where('user_create', $user->name);
+                                  })
+                                  ->orWhere(function($bankQuery) use ($user) {
+                                      $bankQuery->whereNull('id_survey')
+                                               ->where('user_create', $user->name);
+                                  });
+                              })
+                              ->first();
+
         if ($section) {
             // Validar que los nombres o títulos en el JSON están siendo enviados correctamente
             $requiredFields = ['title', 'descrip_sect'];
@@ -222,7 +269,7 @@ class SectionController extends Controller
                 return response()->json(['message' => 'Error al actualizar, id: ' . $id], 500);
             }
         } else {
-            return response()->json(['message' => 'No se encontró la sección, id:' . $id], 404);
+            return response()->json(['message' => 'No se encontró la sección o no tienes acceso a ella, id:' . $id], 404);
         }
     }
     
@@ -230,18 +277,35 @@ class SectionController extends Controller
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(string $id)
+    public function destroy(Request $request, string $id)
     {
-        //
-        $section = SectionModel::find($id);
+        // Obtener el usuario autenticado
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Usuario no autenticado'], 401);
+        }
+
+        // Filtrar por usuario para la lógica de inteligencia de negocio
+        $section = SectionModel::where('id', $id)
+                              ->where(function($query) use ($user) {
+                                  $query->whereHas('survey', function($subQuery) use ($user) {
+                                      $subQuery->where('user_create', $user->name);
+                                  })
+                                  ->orWhere(function($bankQuery) use ($user) {
+                                      $bankQuery->whereNull('id_survey')
+                                               ->where('user_create', $user->name);
+                                  });
+                              })
+                              ->first();
+
         if ($section) {
             if ($section->delete()) {
-                return response()->json(['message' => 'Eliminado con éxito'], 200);
+                return response()->json(['message' => 'Sección eliminada con éxito'], 200);
             } else {
-                return response()->json(['message' => 'Error al eliminar'], 500);
+                return response()->json(['message' => 'Error al eliminar la sección'], 500);
             }
         } else {
-            return response()->json(['message' => 'No se encontró la encuesta'], 404);
+            return response()->json(['message' => 'No se encontró la sección o no tienes acceso a ella'], 404);
         }
     }
 

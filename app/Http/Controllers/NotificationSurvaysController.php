@@ -11,6 +11,7 @@ use App\Models\GroupUserModel;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
+use App\Services\URLIntegrityService;
 
 class NotificationSurvaysController extends Controller
 {
@@ -665,26 +666,466 @@ class NotificationSurvaysController extends Controller
     }
 
     /**
+     * Reenviar encuesta a un usuario específico
+     */
+    public function resendSurveyToUser(Request $request)
+    {
+        try {
+            \Log::info('🔄 RESEND SURVEY: Method called', [
+                'request_data' => $request->all(),
+                'method' => $request->method(),
+                'url' => $request->url()
+            ]);
+
+            $validatedData = $request->validate([
+                'survey_id' => 'required|integer|exists:surveys,id',
+                'email' => 'required|email'
+            ]);
+
+            \Log::info('🔄 RESEND SURVEY: Validation passed', [
+                'validated_data' => $validatedData
+            ]);
+
+            $surveyId = $validatedData['survey_id'];
+            $email = $validatedData['email'];
+
+            // Verificar que la encuesta existe y está activa
+            $survey = SurveyModel::findOrFail($surveyId);
+
+            \Log::info('🔄 RESEND SURVEY: Survey found', [
+                'survey_id' => $survey->id,
+                'survey_title' => $survey->title,
+                'survey_status' => $survey->status
+            ]);
+
+            if (!$survey->status) {
+                \Log::warning('🔄 RESEND SURVEY: Survey not active', [
+                    'survey_id' => $surveyId,
+                    'status' => $survey->status
+                ]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La encuesta no está activa'
+                ], 400);
+            }
+
+            // Verificar que el usuario no ha respondido ya
+            $existingNotification = NotificationSurvaysModel::where('id_survey', $surveyId)
+                ->where('destinatario', $email)
+                ->where('state_results', 'true')
+                ->first();
+
+            if ($existingNotification) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Este usuario ya ha respondido la encuesta'
+                ], 400);
+            }
+
+            // BUSCAR DATOS COMPLETOS DEL USUARIO EN LA BASE DE DATOS
+            $userData = GroupUserModel::where('correo', $email)->first();
+
+            // Si no se encuentra en group_users, buscar en survey_respondents para obtener el nombre correcto
+            if (!$userData) {
+                $surveyRespondent = SurveyRespondentModel::where('respondent_email', $email)
+                    ->where('survey_id', $surveyId)
+                    ->first();
+                $respondentName = $surveyRespondent ? $surveyRespondent->respondent_name : $this->extractNameFromEmail($email);
+
+                \Log::info('🔄 RESEND SURVEY: Name resolution from survey_respondents', [
+                    'email' => $email,
+                    'survey_id' => $surveyId,
+                    'respondent_found' => $surveyRespondent ? true : false,
+                    'respondent_name' => $respondentName,
+                    'source' => $surveyRespondent ? 'survey_respondents' : 'extractNameFromEmail'
+                ]);
+            } else {
+                $respondentName = $userData->nombre;
+                \Log::info('🔄 RESEND SURVEY: Name resolution from group_users', [
+                    'email' => $email,
+                    'respondent_name' => $respondentName,
+                    'source' => 'group_users'
+                ]);
+            }
+
+            // Crear un nuevo token único para esta combinación de encuesta y email
+            $tokenData = [
+                'survey_id' => $surveyId,
+                'email' => $email,
+                'respondent_name' => $respondentName,
+                'issued_at' => Carbon::now()->timestamp,
+                'expires_at' => $survey->end_date ? $survey->end_date->timestamp : Carbon::now()->addDays(30)->timestamp,
+                'unique_id' => Str::uuid()
+            ];
+
+            // Cifrar el token con Laravel Crypt
+            $encryptedToken = Crypt::encrypt($tokenData);
+
+            // CARGAR DATOS DE EMAIL: Buscar una notificación existente de esta encuesta para obtener asunto y cuerpo
+            $existingEmailNotification = NotificationSurvaysModel::where('id_survey', $surveyId)
+                ->whereNotNull('asunto')
+                ->whereNotNull('body')
+                ->where('body', '!=', '')
+                ->first();
+
+            // Preparar los datos de email para la validación posterior
+            $data = [];
+            if ($existingEmailNotification) {
+                $data['asunto'] = $existingEmailNotification->asunto;
+                $data['cuerpo'] = $existingEmailNotification->body;
+
+                // CRÍTICO: Reemplazar nombres hardcodeados en el cuerpo del email con el nombre correcto
+                if ($data['cuerpo'] && $respondentName) {
+                    // Lista de nombres comunes que pueden estar hardcodeados
+                    $hardcodedNames = ['Ana Gómez', 'Ana Gomez', 'Ana García', 'María González', 'Juan Pérez'];
+
+                    foreach ($hardcodedNames as $hardcodedName) {
+                        if (strpos($data['cuerpo'], $hardcodedName) !== false) {
+                            $data['cuerpo'] = str_replace($hardcodedName, $respondentName, $data['cuerpo']);
+                            \Log::info('✅ RESEND: Replaced hardcoded name in email body', [
+                                'hardcoded_name' => $hardcodedName,
+                                'correct_name' => $respondentName,
+                                'email' => $email
+                            ]);
+                        }
+                    }
+                }
+
+                // CRÍTICO: Reemplazar URLs hardcodeadas con email incorrecto por el email correcto
+                if ($data['cuerpo'] && $email) {
+                    // Buscar y reemplazar URLs con emails incorrectos
+                    $hardcodedEmails = ['ana.gomez@ejemplo.com', 'ana.gomez%40ejemplo.com'];
+                    $correctEncodedEmail = urlencode($email);
+
+                    foreach ($hardcodedEmails as $hardcodedEmail) {
+                        if (strpos($data['cuerpo'], $hardcodedEmail) !== false) {
+                            $data['cuerpo'] = str_replace($hardcodedEmail, $correctEncodedEmail, $data['cuerpo']);
+                            \Log::info('✅ RESEND: Replaced hardcoded email in URL', [
+                                'hardcoded_email' => $hardcodedEmail,
+                                'correct_email' => $correctEncodedEmail,
+                                'recipient' => $email
+                            ]);
+                        }
+                    }
+
+                    // CRÍTICO: Generar hash único para reenvío que sea diferente a hashes bloqueados
+                    // Verificar si hay hashes bloqueados existentes para este usuario
+                    $existingTokens = \App\Models\SurveyAccessToken::where('survey_id', $surveyId)
+                        ->where('email', $email)
+                        ->pluck('hash')
+                        ->toArray();
+
+                    // Generar hash base compacto usando MD5 (22 chars) - compatible con validador de 32 chars
+                    $md5Hash = md5($surveyId . '-' . $email);
+                    $baseHash = rtrim(base64_encode(hex2bin($md5Hash)), '=');
+                    $baseHash = str_replace(['+', '/'], ['-', '_'], $baseHash); // URL-safe
+
+                    // Si el hash base no está bloqueado, usarlo directamente
+                    if (!in_array($baseHash, $existingTokens)) {
+                        $newHash = $baseHash;
+                    } else {
+                        // Si está bloqueado, agregar sufijo corto único (mantener longitud bajo 32 chars)
+                        $attempt = 1;
+                        do {
+                            $suffix = base_convert(time() + $attempt, 10, 36); // Base36 para compactness
+                            $newHash = $baseHash . substr($suffix, -6); // Hasta 28 chars total (22 + 6)
+                            $attempt++;
+                        } while (in_array($newHash, $existingTokens) && $attempt < 100);
+
+                        if ($attempt >= 100) {
+                            // Fallback: usar solo timestamp base36
+                            $newHash = $baseHash . base_convert(time(), 10, 36);
+                            $newHash = substr($newHash, 0, 32); // Forzar límite de 32 chars
+                        }
+                    }
+
+                    // Reemplazar cualquier hash anterior en el cuerpo del email
+                    $oldHashes = [
+                        base64_encode($surveyId . '-ana.gomez@ejemplo.com'),
+                        base64_encode($surveyId . '-' . $email), // Hash original sin timestamp
+                    ];
+
+                    foreach ($oldHashes as $oldHash) {
+                        $oldHash = str_replace(['+', '/', '='], ['', '', ''], $oldHash);
+                        if (strpos($data['cuerpo'], $oldHash) !== false) {
+                            $data['cuerpo'] = str_replace($oldHash, $newHash, $data['cuerpo']);
+                            \Log::info('✅ RESEND: Replaced hash in URL', [
+                                'old_hash' => $oldHash,
+                                'new_unique_hash' => $newHash,
+                                'recipient' => $email,
+                                'security_note' => 'New unique hash generated to avoid blocked hash conflicts'
+                            ]);
+                        }
+                    }
+                }
+
+                \Log::info('🔄 RESEND SURVEY: Email data loaded from existing notification', [
+                    'asunto' => $data['asunto'],
+                    'cuerpo_length' => strlen($data['cuerpo']),
+                    'source_notification_id' => $existingEmailNotification->id,
+                    'recipient_name' => $respondentName
+                ]);
+            } else {
+                // Usar valores por defecto si no hay notificación previa
+                $data['asunto'] = 'Invitación a Encuesta - ' . $survey->title;
+                $data['cuerpo'] = "Estimado/a participante,\n\nHa sido invitado/a a participar en la encuesta: {$survey->title}\n\nPor favor, haga clic en el enlace que se enviará a su correo electrónico para acceder a la encuesta.\n\nGracias por su participación.";
+                \Log::info('🔄 RESEND SURVEY: Using default email data', [
+                    'asunto' => $data['asunto'],
+                    'cuerpo_length' => strlen($data['cuerpo'])
+                ]);
+            }
+
+            // CRÍTICO: Limpiar tokens de acceso anteriores para permitir el nuevo hash
+            URLIntegrityService::resetAccessTokensForResend($surveyId, $email);
+
+            \Log::info('🔄 RESEND SURVEY: Proceeding to notification creation...', [
+                'data_keys' => array_keys($data),
+                'survey_id' => $surveyId,
+                'email' => $email
+            ]);
+
+            // Actualizar o crear notificación para el reenvío
+            try {
+                \Log::info('🔄 RESEND SURVEY: About to update/create notification...', [
+                    'survey_id' => $surveyId,
+                    'email' => $email,
+                    'respondent_name' => $respondentName
+                ]);
+
+                // Buscar notificación existente
+                $notification = NotificationSurvaysModel::where('id_survey', $surveyId)
+                    ->where('destinatario', $email)
+                    ->first();
+
+                $notificationData = [
+                    'data' => json_encode([
+                        'survey_id' => (int)$surveyId,
+                        'type' => 'resend_email_survey_access',
+                        'metadata' => [
+                            'grupo' => $userData ? ($userData->group->name ?? null) : null,
+                            'regional' => $userData ? $userData->regional : null,
+                            'tipoDocumento' => $userData ? $userData->tipo_documento : null,
+                            'numeroDocumento' => $userData ? $userData->numero_documento : null,
+                            'centroFormacion' => $userData ? $userData->centro_formacion : null,
+                            'programaFormacion' => $userData ? $userData->programa_formacion : null,
+                            'fichaGrupo' => $userData ? $userData->ficha_grupo : null,
+                            'tipoCaracterizacion' => $userData ? $userData->tipo_caracterizacion : null
+                        ],
+                        'token_issued_at' => Carbon::now()->toISOString(),
+                        'unique_token' => $tokenData['unique_id'],
+                        'resend_action' => true,
+                        'resent_at' => Carbon::now()->toISOString()
+                    ]),
+                    'state' => 'pending_response',
+                    'state_results' => 'false',
+                    'date_insert' => Carbon::now(),
+                    'id_survey' => (int)$surveyId,
+                    'destinatario' => (string)$email,
+                    'asunto' => $data['asunto'],
+                    'body' => $data['cuerpo'],
+                    'expired_date' => $survey->end_date ? Carbon::parse($survey->end_date) : Carbon::now()->addDays(30),
+                    'respondent_name' => $respondentName,
+                    'estado' => 'pendiente', // Cambiar a pendiente para que el servicio de correos lo procese
+                    'sent_at' => null, // Resetear fecha de envío
+                    'retry_count' => 0, // Resetear contador de reintentos
+                    'last_error' => null // Limpiar último error
+                ];
+
+                if ($notification) {
+                    // Actualizar notificación existente
+                    $notification->update($notificationData);
+                    \Log::info('🔄 RESEND SURVEY: Existing notification updated successfully', [
+                        'notification_id' => $notification->id,
+                        'survey_id' => $surveyId,
+                        'email' => $email,
+                        'estado_changed_to' => 'pendiente',
+                        'sent_at_reset' => 'null',
+                        'ready_for_email_service' => true
+                    ]);
+                } else {
+                    // Crear nueva notificación si no existe
+                    $notification = NotificationSurvaysModel::create($notificationData);
+                    \Log::info('🔄 RESEND SURVEY: New notification created successfully', [
+                        'notification_id' => $notification->id,
+                        'survey_id' => $surveyId,
+                        'email' => $email,
+                        'estado_set_to' => 'pendiente',
+                        'ready_for_email_service' => true
+                    ]);
+                }
+
+                // CRÍTICO: Registrar el nuevo hash único en survey_access_tokens para validación
+                try {
+                    // Extraer el hash del email body generado (incluyendo caracteres URL-safe)
+                    if (preg_match('/&hash=([a-zA-Z0-9_-]+)/', $data['cuerpo'], $matches)) {
+                        $newHashFromEmail = $matches[1];
+
+                        // Registrar el nuevo hash como válido en la tabla
+                        $accessToken = \App\Models\SurveyAccessToken::create([
+                            'survey_id' => $surveyId,
+                            'email' => $email,
+                            'hash' => $newHashFromEmail,
+                            'status' => 'active',
+                            'first_access_at' => now(),
+                            'access_count' => 0,
+                            'device_fingerprint' => 'resend-generated',
+                            'ip_address' => request()->ip() ?? '127.0.0.1',
+                            'user_agent' => 'Resend System',
+                            'created_at' => now(),
+                            'updated_at' => now()
+                        ]);
+
+                        \Log::info('✅ RESEND: New hash registered in survey_access_tokens', [
+                            'survey_id' => $surveyId,
+                            'email' => $email,
+                            'new_hash' => $newHashFromEmail,
+                            'access_token_id' => $accessToken->id,
+                            'security_note' => 'Resend hash validated and ready for use'
+                        ]);
+                    } else {
+                        \Log::warning('⚠️ RESEND: Could not extract hash from email body for registration', [
+                            'survey_id' => $surveyId,
+                            'email' => $email,
+                            'body_length' => strlen($data['cuerpo'])
+                        ]);
+                    }
+                } catch (\Exception $hashException) {
+                    \Log::error('❌ RESEND: Error registering new hash in survey_access_tokens', [
+                        'survey_id' => $surveyId,
+                        'email' => $email,
+                        'error' => $hashException->getMessage(),
+                        'note' => 'Hash registration failed but notification was created successfully'
+                    ]);
+                }
+            } catch (\Exception $e) {
+                \Log::error('🔄 RESEND SURVEY: Error updating/creating notification', [
+                    'error' => $e->getMessage(),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                    'survey_id' => $surveyId,
+                    'email' => $email
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Error al actualizar la notificación de reenvío: ' . $e->getMessage()
+                ], 500);
+            }
+
+            \Log::info('🔄 RESEND SURVEY: Notification update completed, moving to survey respondents...', [
+                'notification_id' => $notification->id,
+                'survey_id' => $surveyId,
+                'email' => $email
+            ]);
+
+            // Actualizar el registro en survey_respondents
+            try {
+                \Log::info('🔄 RESEND SURVEY: About to update survey respondents...', [
+                    'survey_id' => $surveyId,
+                    'email' => $email
+                ]);
+
+            $existingRespondent = SurveyRespondentModel::where('survey_id', $surveyId)
+                ->where('respondent_email', $email)
+                ->first();
+
+            if ($existingRespondent) {
+                // Actualizar registro existente
+                $existingRespondent->update([
+                    'status' => 'Enviada',
+                    'sent_at' => now(),
+                    'notification_id' => $notification->id
+                ]);
+                \Log::info('🔄 RESEND SURVEY: Survey respondent updated successfully', [
+                    'respondent_id' => $existingRespondent->id
+                ]);
+            } else {
+                // Crear nuevo registro si no existe
+                $emailToken = Str::random(64);
+
+                $newRespondent = SurveyRespondentModel::create([
+                    'survey_id' => $surveyId,
+                    'respondent_name' => $respondentName,
+                    'respondent_email' => $email,
+                    'status' => 'Enviada',
+                    'sent_at' => now(),
+                    'notification_id' => $notification->id,
+                    'email_token' => $emailToken
+                ]);
+                \Log::info('🔄 RESEND SURVEY: New survey respondent created successfully', [
+                    'respondent_id' => $newRespondent->id
+                ]);
+            }
+
+            } catch (\Exception $e) {
+                \Log::error('🔄 RESEND SURVEY: Error updating/creating survey respondent', [
+                    'error' => $e->getMessage(),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                    'survey_id' => $surveyId,
+                    'email' => $email
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Error al actualizar el registro de encuestado: ' . $e->getMessage()
+                ], 500);
+            }
+
+            // Generar la URL de la encuesta
+            $surveyUrl = config('app.frontend_url', 'http://localhost:5173') .
+                        '/encuestados/survey-view-manual/' . $surveyId .
+                        '?token=' . urlencode($encryptedToken);
+
+            \Log::info('🔄 RESEND SURVEY: Method completed successfully', [
+                'email' => $email,
+                'notification_id' => $notification->id,
+                'survey_url' => $surveyUrl
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Encuesta reenviada exitosamente',
+                'data' => [
+                    'email' => $email,
+                    'respondent_name' => $respondentName,
+                    'survey_url' => $surveyUrl,
+                    'notification_id' => $notification->id,
+                    'expires_at' => $survey->end_date ?? Carbon::now()->addDays(30),
+                    'resent_at' => Carbon::now()->toISOString()
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al reenviar la encuesta',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * Extrae un nombre aproximado del correo electrónico
      */
     private function extractNameFromEmail($email)
     {
         // Extraer la parte antes del @
         $namePart = explode('@', $email)[0];
-        
+
         // Reemplazar puntos, guiones y números con espacios
         $namePart = preg_replace('/[._-]/', ' ', $namePart);
         $namePart = preg_replace('/\d+/', '', $namePart);
-        
+
         // Capitalizar cada palabra
         $name = ucwords(trim($namePart));
-        
+
         // Si queda muy corto o vacío, usar el correo completo
         if (strlen($name) < 2) {
             return $email;
         }
-        
+
         return $name;
     }
-    
+
 }
