@@ -9,6 +9,7 @@ use App\Models\SurveyModel;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Crypt;
 use Carbon\Carbon;
+use App\Services\URLIntegrityService;
 
 class ManualSurveyResponseController extends Controller
 {
@@ -258,19 +259,174 @@ class ManualSurveyResponseController extends Controller
         try {
             $validator = Validator::make($request->all(), [
                 'survey_id' => 'required|integer',
-                'token' => 'nullable|string'
+                'token' => 'nullable|string',
+                'email' => 'nullable|email',
+                'hash' => 'nullable|string'
             ]);
 
             if ($validator->fails()) {
+                \Log::warning('❌ URL validation failed - Invalid parameters', [
+                    'errors' => $validator->errors(),
+                    'ip' => $request->ip(),
+                    'user_agent' => $request->userAgent()
+                ]);
+
                 return response()->json([
                     'success' => false,
-                    'message' => 'Datos de validación incorrectos',
+                    'message' => 'Acceso no autorizado. Esta URL no es válida o ha sido modificada.',
                     'errors' => $validator->errors()
                 ], 400);
             }
 
             $surveyId = $request->input('survey_id');
             $token = $request->input('token');
+            $email = $request->input('email');
+            $hash = $request->input('hash');
+
+            // SEGURIDAD CRÍTICA: Validar integridad de URL para acceso sin token
+            if (!$token && !$hash) {
+                \Log::warning('❌ Security violation - URL missing both token and hash', [
+                    'survey_id' => $surveyId,
+                    'email' => $email,
+                    'ip' => $request->ip(),
+                    'url' => $request->fullUrl()
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Acceso no autorizado. Esta URL no es válida o ha sido modificada.'
+                ], 401);
+            }
+
+            // SEGURIDAD: Validar hash de integridad para URLs sin token
+            if (!$token && $hash) {
+                if (!$email) {
+                    \Log::warning('❌ Hash validation failed - Missing email parameter', [
+                        'survey_id' => $surveyId,
+                        'hash' => $hash,
+                        'ip' => $request->ip()
+                    ]);
+
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Acceso no autorizado. Esta URL no es válida o ha sido modificada.'
+                    ], 401);
+                }
+
+                // Validar formato de email
+                if (!URLIntegrityService::validateEmailFormat($email)) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Acceso no autorizado. Esta URL no es válida o ha sido modificada.'
+                    ], 401);
+                }
+
+                // Validar hash de integridad
+                // validateHashWithDetails ya maneja tanto HMAC como legacy (con/sin timestamp)
+                $hashValidationResult = URLIntegrityService::validateHashWithDetails($surveyId, $email, $hash);
+
+                \Log::info('🔍 Hash validation result:', [
+                    'survey_id' => $surveyId,
+                    'email' => $email,
+                    'hash_length' => strlen($hash),
+                    'valid' => $hashValidationResult['valid'],
+                    'error_type' => $hashValidationResult['error_type'] ?? 'none'
+                ]);
+
+                if (!$hashValidationResult['valid']) {
+                    $errorType = $hashValidationResult['error_type'] ?? 'invalid_url';
+
+                    switch ($errorType) {
+                        case 'device_mismatch':
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Este enlace solo puede ser usado desde el dispositivo original.',
+                                'error_type' => 'device_mismatch'
+                            ], 403);
+
+                        case 'link_sharing':
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Este enlace no puede ser compartido. Cada enlace es personal e intransferible.',
+                                'error_type' => 'link_sharing'
+                            ], 403);
+
+                        case 'hash_expired':
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'El enlace de acceso ha expirado.',
+                                'error_type' => 'expired'
+                            ], 401);
+
+                        case 'hash_tampering':
+                        case 'invalid_format':
+                        default:
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Acceso no autorizado. Esta URL no es válida o ha sido modificada.',
+                                'error_type' => 'invalid_url'
+                            ], 401);
+                    }
+                }
+
+                \Log::info('✅ Hash-based URL validation successful', [
+                    'survey_id' => $surveyId,
+                    'email' => $email,
+                    'ip' => $request->ip()
+                ]);
+
+                // VALIDACIÓN CRÍTICA: Verificar que el enlace no haya sido compartido entre dispositivos
+                $deviceValidationResult = URLIntegrityService::validateDeviceAccess($surveyId, $email, $hash);
+
+                if (!$deviceValidationResult['valid']) {
+                    $errorType = $deviceValidationResult['error_type'] ?? 'unknown';
+
+                    switch ($errorType) {
+                        case 'link_sharing':
+                            \Log::warning('🚨 LINK SHARING BLOCKED', [
+                                'survey_id' => $surveyId,
+                                'email' => $email,
+                                'ip' => $request->ip(),
+                                'user_agent' => $request->userAgent()
+                            ]);
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Este enlace no puede ser compartido. Cada enlace es personal e intransferible.',
+                                'error_type' => 'link_sharing'
+                            ], 403);
+
+                        case 'link_blocked':
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Este enlace ha sido bloqueado por motivos de seguridad.',
+                                'error_type' => 'link_blocked'
+                            ], 403);
+
+                        default:
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Error de validación de acceso.',
+                                'error_type' => 'validation_error'
+                            ], 500);
+                    }
+                }
+
+                if ($deviceValidationResult['is_first_access']) {
+                    \Log::info('🔐 First device access registered', [
+                        'survey_id' => $surveyId,
+                        'email' => $email,
+                        'access_token_id' => $deviceValidationResult['access_token_id'],
+                        'ip' => $request->ip()
+                    ]);
+                } else {
+                    \Log::info('✅ Returning device access validated', [
+                        'survey_id' => $surveyId,
+                        'email' => $email,
+                        'access_token_id' => $deviceValidationResult['access_token_id'],
+                        'ip' => $request->ip()
+                    ]);
+                }
+            }
 
             // Verificar que la encuesta existe
             $survey = SurveyModel::with(['sections', 'surveyQuestions'])->find($surveyId);

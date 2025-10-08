@@ -58,11 +58,15 @@ Route::prefix('groups-test')->controller(GroupController::class)->group(function
 // Ruta temporal para testing de notificaciones (sin autenticación)
 Route::post('notification-test/store', [NotificationSurvaysController::class, 'store']);
 
+// Ruta para verificar duplicados antes de envío masivo
+Route::post('notifications/check-duplicates', [NotificationSurvaysController::class, 'checkDuplicateNotifications']);
+
 // Rutas públicas para acceso a encuestas por correo (sin autenticación)
 Route::prefix('survey-email')->controller(SurveyEmailController::class)->group(function () {
     Route::post('/validate-access', 'validateAccess')->name('survey.email.validate');
     Route::post('/submit-response', 'submitSurveyResponse')->name('survey.email.submit');
     Route::post('/check-status', 'checkResponseStatus')->name('survey.email.status');
+    Route::post('/generate-hash', 'generateValidHash')->name('survey.email.generate.hash');
 });
 
 // Rutas públicas para respuestas manuales con validación de token
@@ -188,6 +192,7 @@ Route::middleware(['debug.auth', 'auth:sanctum'])->group(function () {
         Route::get('/download-respondents-template', 'downloadRespondentsTemplate')->name('Notification.downloadRespondentsTemplate');
         Route::post('/generate-email-links', 'generateSurveyEmailLinks')->name('Notification.generateEmailLinks');
         Route::post('/survey-status', 'getSurveyNotificationStatus')->name('Notification.surveyStatus');
+        Route::post('/resend-survey', 'resendSurveyToUser')->name('Notification.resendSurvey');
     });
 
 
