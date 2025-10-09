@@ -250,7 +250,7 @@ class SurveyEmailController extends Controller
             // Limpiar caracteres especiales del hash para URL
             $hash = str_replace(['+', '/', '='], ['', '', ''], $hash);
 
-            $surveyUrl = config('app.frontend_url', 'http://localhost:5173') .
+            $surveyUrl = config('app.frontend_url', 'http://149.130.180.163:5173') .
                         '/encuestados/survey-view-manual/' . $data['survey_id'] .
                         '?email=' . urlencode($data['email']) . '&hash=' . $hash;
 
