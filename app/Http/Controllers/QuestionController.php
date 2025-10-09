@@ -399,47 +399,21 @@ public function store(Request $request)
         }
     }
     
-    // NUNCA CREAR NUEVAS PREGUNTAS - Solo devolver error si no hay nada que actualizar
-    // SOLUCIÓN: Permitir creación de preguntas hijas para encuestas sin publicar
+    // Permitir creación de preguntas si no hay nada que actualizar
     if (!$existingQuestion && !$questionToUpdate) {
         $isChildQuestion = isset($data['cod_padre']) && $data['cod_padre'] > 0;
-        
-        if ($isChildQuestion) {
-            \Log::info('CHILD_QUESTION_CREATION: Allowing creation of child question', [
-                'cod_padre' => $data['cod_padre'],
-                'user_id' => $user->id,
-                'title' => $data['title'],
-                'type_questions_id' => $data['type_questions_id'],
-                'policy' => 'ALLOW_CHILD_CREATION'
-            ]);
-            
-            // Continuar con la creación normal para preguntas hijas
-        } else {
-            // SKIP THIS VALIDATION FOR BANK QUESTIONS
-            if (isset($data['bank']) && $data['bank'] === true) {
-                \Log::info('BANK_QUESTION: Allowing parent question creation for bank', [
-                    'is_child_question' => false,
-                    'user_id' => $user->id,
-                    'title' => $data['title'],
-                    'type_questions_id' => $data['type_questions_id'],
-                    'bank' => $data['bank']
-                ]);
-                // Continue with creation for bank questions
-            } else {
-                \Log::error('NEVER_CREATE: No existing parent question found to update', [
-                    'is_child_question' => false,
-                    'user_id' => $user->id,
-                    'title' => $data['title'],
-                    'type_questions_id' => $data['type_questions_id']
-                ]);
-                
-                return response()->json([
-                    'error' => 'No se encontró ninguna pregunta existente para actualizar',
-                    'message' => 'La creación de preguntas padre está deshabilitada - solo se permiten actualizaciones',
-                    'policy' => 'NEVER_CREATE_ONLY_UPDATE'
-                ], 422);
-            }
-        }
+        $isBankQuestion = isset($data['bank']) && $data['bank'] === true;
+
+        \Log::info('QUESTION_CREATION: Allowing creation of new question', [
+            'is_child_question' => $isChildQuestion,
+            'is_bank_question' => $isBankQuestion,
+            'user_id' => $user->id,
+            'title' => $data['title'],
+            'type_questions_id' => $data['type_questions_id'],
+            'policy' => 'ALLOW_CREATION'
+        ]);
+
+        // Continuar con la creación normal para todas las preguntas
     }
 
     try {
