@@ -1116,7 +1116,7 @@ class URLIntegrityService
     public static function generateSecureUrl($surveyId, $email, $type = 'standard', $baseUrl = null)
     {
         if (!$baseUrl) {
-            $baseUrl = env('FRONTEND_URL', 'http://149.130.180.163:5173');
+            $baseUrl = env('FRONTEND_URL', 'http://localhost:5173');
         }
 
         $hash = self::generateHash($surveyId, $email, $type);

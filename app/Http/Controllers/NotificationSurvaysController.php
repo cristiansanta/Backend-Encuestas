@@ -568,7 +568,7 @@ class NotificationSurvaysController extends Controller
                     }
 
                     // Generar la URL de la encuesta
-                    $surveyUrl = config('app.frontend_url', 'http://149.130.180.163:5173') .
+                    $surveyUrl = config('app.frontend_url', 'http://localhost:5173') .
                                 '/encuestados/survey-view-manual/' . $surveyId .
                                 '?token=' . urlencode($encryptedToken);
 
@@ -770,11 +770,14 @@ class NotificationSurvaysController extends Controller
             // Cifrar el token con Laravel Crypt
             $encryptedToken = Crypt::encrypt($tokenData);
 
-            // CARGAR DATOS DE EMAIL: Buscar una notificación existente de esta encuesta para obtener asunto y cuerpo
+            // CARGAR DATOS DE EMAIL: Buscar la notificación ORIGINAL (la más antigua) de esta encuesta
+            // CRÍTICO: Usar orderBy para garantizar que siempre se cargue el template original
+            // y no notificaciones de reenvíos anteriores a otros usuarios
             $existingEmailNotification = NotificationSurvaysModel::where('id_survey', $surveyId)
                 ->whereNotNull('asunto')
                 ->whereNotNull('body')
                 ->where('body', '!=', '')
+                ->orderBy('date_insert', 'ASC') // ✅ SOLUCIÓN: Cargar la PRIMERA notificación enviada
                 ->first();
 
             // Preparar los datos de email para la validación posterior
@@ -783,39 +786,104 @@ class NotificationSurvaysController extends Controller
                 $data['asunto'] = $existingEmailNotification->asunto;
                 $data['cuerpo'] = $existingEmailNotification->body;
 
-                // CRÍTICO: Reemplazar nombres hardcodeados en el cuerpo del email con el nombre correcto
+                // CRÍTICO: Reemplazar CUALQUIER nombre que aparezca en patrones comunes del template
+                // con el nombre correcto del destinatario actual
                 if ($data['cuerpo'] && $respondentName) {
-                    // Lista de nombres comunes que pueden estar hardcodeados
-                    $hardcodedNames = ['Ana Gómez', 'Ana Gomez', 'Ana García', 'María González', 'Juan Pérez'];
+                    // Obtener el nombre del destinatario original del template
+                    $originalNotification = $existingEmailNotification;
+                    $originalRecipientName = $originalNotification->respondent_name;
 
-                    foreach ($hardcodedNames as $hardcodedName) {
-                        if (strpos($data['cuerpo'], $hardcodedName) !== false) {
-                            $data['cuerpo'] = str_replace($hardcodedName, $respondentName, $data['cuerpo']);
-                            \Log::info('✅ RESEND: Replaced hardcoded name in email body', [
-                                'hardcoded_name' => $hardcodedName,
-                                'correct_name' => $respondentName,
-                                'email' => $email
+                    \Log::info('🔄 RESEND: Name replacement process', [
+                        'original_recipient_name' => $originalRecipientName,
+                        'new_recipient_name' => $respondentName,
+                        'original_email' => $originalNotification->destinatario,
+                        'new_email' => $email
+                    ]);
+
+                    // Si tenemos el nombre original, reemplazarlo con el nuevo nombre
+                    if ($originalRecipientName && $originalRecipientName !== $respondentName) {
+                        $beforeReplace = $data['cuerpo'];
+                        $data['cuerpo'] = str_replace($originalRecipientName, $respondentName, $data['cuerpo']);
+
+                        if ($beforeReplace !== $data['cuerpo']) {
+                            \Log::info('✅ RESEND: Replaced original recipient name in email body', [
+                                'original_name' => $originalRecipientName,
+                                'new_name' => $respondentName,
+                                'new_email' => $email
                             ]);
+                        }
+                    }
+
+                    // Reemplazar también patrones comunes como "Estimado/a [Nombre]"
+                    // usando regex para capturar nombres después de saludos comunes
+                    $salutationPatterns = [
+                        '/Estimado\/a\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)*)/u',
+                        '/Hola\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)*)/u',
+                        '/Querido\/a\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)*)/u',
+                    ];
+
+                    foreach ($salutationPatterns as $pattern) {
+                        if (preg_match($pattern, $data['cuerpo'], $matches)) {
+                            $foundName = $matches[1];
+                            if ($foundName !== $respondentName) {
+                                $data['cuerpo'] = preg_replace($pattern, '$0', $data['cuerpo']);
+                                $data['cuerpo'] = str_replace($foundName, $respondentName, $data['cuerpo']);
+                                \Log::info('✅ RESEND: Replaced name in salutation pattern', [
+                                    'found_name' => $foundName,
+                                    'new_name' => $respondentName,
+                                    'pattern' => $pattern
+                                ]);
+                            }
                         }
                     }
                 }
 
-                // CRÍTICO: Reemplazar URLs hardcodeadas con email incorrecto por el email correcto
+                // CRÍTICO: Reemplazar URLs con el email del destinatario original por el email correcto
                 if ($data['cuerpo'] && $email) {
-                    // Buscar y reemplazar URLs con emails incorrectos
-                    $hardcodedEmails = ['ana.gomez@ejemplo.com', 'ana.gomez%40ejemplo.com'];
-                    $correctEncodedEmail = urlencode($email);
+                    // Obtener el email original del template
+                    $originalEmail = $existingEmailNotification->destinatario;
+                    $originalEncodedEmail = urlencode($originalEmail);
+                    $newEncodedEmail = urlencode($email);
 
-                    foreach ($hardcodedEmails as $hardcodedEmail) {
-                        if (strpos($data['cuerpo'], $hardcodedEmail) !== false) {
-                            $data['cuerpo'] = str_replace($hardcodedEmail, $correctEncodedEmail, $data['cuerpo']);
-                            \Log::info('✅ RESEND: Replaced hardcoded email in URL', [
-                                'hardcoded_email' => $hardcodedEmail,
-                                'correct_email' => $correctEncodedEmail,
-                                'recipient' => $email
+                    \Log::info('🔄 RESEND: Email replacement in URLs', [
+                        'original_email' => $originalEmail,
+                        'original_encoded' => $originalEncodedEmail,
+                        'new_email' => $email,
+                        'new_encoded' => $newEncodedEmail
+                    ]);
+
+                    // Reemplazar email original (tanto en formato normal como URL-encoded)
+                    if ($originalEmail !== $email) {
+                        // Reemplazar versión URL-encoded
+                        if (strpos($data['cuerpo'], $originalEncodedEmail) !== false) {
+                            $data['cuerpo'] = str_replace($originalEncodedEmail, $newEncodedEmail, $data['cuerpo']);
+                            \Log::info('✅ RESEND: Replaced original encoded email in URL', [
+                                'original' => $originalEncodedEmail,
+                                'new' => $newEncodedEmail
+                            ]);
+                        }
+
+                        // Reemplazar versión normal (por si aparece en el texto)
+                        if (strpos($data['cuerpo'], $originalEmail) !== false) {
+                            $data['cuerpo'] = str_replace($originalEmail, $email, $data['cuerpo']);
+                            \Log::info('✅ RESEND: Replaced original email in body text', [
+                                'original' => $originalEmail,
+                                'new' => $email
                             ]);
                         }
                     }
+
+                    // Usar regex para encontrar y reemplazar CUALQUIER patrón de email en parámetros de URL
+                    // Patrón: email=[cualquier_email_encoded] o email=[cualquier_email]
+                    $emailUrlPattern = '/email=([^&\s"\'<>]+)/';
+                    $data['cuerpo'] = preg_replace_callback($emailUrlPattern, function($matches) use ($newEncodedEmail, $email) {
+                        return 'email=' . $newEncodedEmail;
+                    }, $data['cuerpo']);
+
+                    \Log::info('✅ RESEND: Applied regex pattern to replace all email parameters in URLs', [
+                        'new_email' => $newEncodedEmail,
+                        'pattern' => $emailUrlPattern
+                    ]);
 
                     // CRÍTICO: Generar hash ÚNICO para cada reenvío con timestamp
                     // Esto permite que cada enlace tenga su propio registro independiente
@@ -837,23 +905,39 @@ class NotificationSurvaysController extends Controller
                         'note' => 'Each resend gets unique hash to maintain independent block status'
                     ]);
 
-                    // Reemplazar cualquier hash anterior en el cuerpo del email
-                    $oldHashes = [
-                        base64_encode($surveyId . '-ana.gomez@ejemplo.com'),
-                        base64_encode($surveyId . '-' . $email), // Hash original sin timestamp
-                    ];
+                    // CRÍTICO: Usar regex para reemplazar CUALQUIER hash en URLs
+                    // Patrón: hash=[string_base64_sin_caracteres_especiales]
+                    // Esto reemplaza tanto hashes del email original como de reenvíos anteriores
+                    $hashPattern = '/hash=([A-Za-z0-9]+)/';
+                    $replacementCount = 0;
 
-                    foreach ($oldHashes as $oldHash) {
-                        $oldHash = str_replace(['+', '/', '='], ['', '', ''], $oldHash);
-                        if (strpos($data['cuerpo'], $oldHash) !== false) {
-                            $data['cuerpo'] = str_replace($oldHash, $newHash, $data['cuerpo']);
-                            \Log::info('✅ RESEND: Replaced hash in URL', [
-                                'old_hash' => $oldHash,
-                                'new_unique_hash' => $newHash,
-                                'recipient' => $email,
-                                'security_note' => 'New unique hash generated to avoid blocked hash conflicts'
-                            ]);
-                        }
+                    $data['cuerpo'] = preg_replace_callback($hashPattern, function($matches) use ($newHash, &$replacementCount, $email) {
+                        $oldHash = $matches[1];
+                        $replacementCount++;
+
+                        \Log::info('✅ RESEND: Replacing hash found in URL', [
+                            'old_hash' => $oldHash,
+                            'new_hash' => $newHash,
+                            'recipient' => $email,
+                            'replacement_number' => $replacementCount
+                        ]);
+
+                        return 'hash=' . $newHash;
+                    }, $data['cuerpo']);
+
+                    if ($replacementCount > 0) {
+                        \Log::info('✅ RESEND: All hashes replaced in URLs', [
+                            'total_replacements' => $replacementCount,
+                            'new_unique_hash' => $newHash,
+                            'recipient' => $email,
+                            'security_note' => 'New unique hash generated to avoid blocked hash conflicts'
+                        ]);
+                    } else {
+                        \Log::warning('⚠️ RESEND: No hash found in email body to replace', [
+                            'recipient' => $email,
+                            'survey_id' => $surveyId,
+                            'new_hash' => $newHash
+                        ]);
                     }
                 }
 
@@ -1037,7 +1121,7 @@ class NotificationSurvaysController extends Controller
             }
 
             // Generar la URL de la encuesta
-            $surveyUrl = config('app.frontend_url', 'http://149.130.180.163:5173') .
+            $surveyUrl = config('app.frontend_url', 'http://localhost:5173') .
                         '/encuestados/survey-view-manual/' . $surveyId .
                         '?token=' . urlencode($encryptedToken);
 
