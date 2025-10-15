@@ -377,23 +377,40 @@ class TemporarySurveyController extends Controller
             $survey = \App\Models\SurveyModel::create($surveyData);
             \Log::info("TemporarySurveyController::publish - Created survey ID: {$survey->id}");
 
-            // 2. Transfer sections
+            // 2. Transfer sections - CRÍTICO: NO duplicar secciones del banco
             $sectionsData = $temporarySurvey->sections ?? [];
             $sectionIdMap = []; // Map temporary section IDs to permanent ones
 
             foreach ($sectionsData as $sectionData) {
-                $section = \App\Models\SectionModel::create([
-                    'title' => $sectionData['title'] ?? 'Sección sin título',
-                    'descrip_sect' => $sectionData['description'] ?? '',
-                    'id_survey' => $survey->id
-                ]);
-                
+                $sectionTitle = $sectionData['title'] ?? 'Sección sin título';
+
+                // MEJORA CRÍTICA: Verificar si la sección ya existe en el banco
+                // Las secciones del banco NO tienen id_survey (es NULL)
+                $existingBankSection = \App\Models\SectionModel::whereNull('id_survey')
+                    ->where('title', $sectionTitle)
+                    ->where('user_create', Auth::user()->name ?? Auth::user()->email ?? 'system')
+                    ->first();
+
+                if ($existingBankSection) {
+                    // REUTILIZAR sección del banco en lugar de crear duplicado
+                    $section = $existingBankSection;
+                    \Log::info("TemporarySurveyController::publish - REUSING bank section ID: {$section->id} for temp ID: " . ($sectionData['id'] ?? 'unknown'));
+                } else {
+                    // Solo crear nueva sección si NO existe en el banco
+                    // NOTA: Las secciones se mantienen en el banco (id_survey = NULL) para poder reutilizarlas
+                    $section = \App\Models\SectionModel::create([
+                        'title' => $sectionTitle,
+                        'descrip_sect' => $sectionData['description'] ?? '',
+                        'id_survey' => null, // Mantener en banco para reutilización
+                        'user_create' => Auth::user()->name ?? Auth::user()->email ?? 'system'
+                    ]);
+                    \Log::info("TemporarySurveyController::publish - Created NEW bank section ID: {$section->id} for temp ID: " . ($sectionData['id'] ?? 'unknown'));
+                }
+
                 // Map temporary ID to permanent ID
                 if (isset($sectionData['id'])) {
                     $sectionIdMap[$sectionData['id']] = $section->id;
                 }
-                
-                \Log::info("TemporarySurveyController::publish - Created section ID: {$section->id} for temp ID: " . ($sectionData['id'] ?? 'unknown'));
             }
 
             // 3. Transfer questions with their custom options
@@ -420,35 +437,63 @@ class TemporarySurveyController extends Controller
                     $sectionId = array_values($sectionIdMap)[0]; // Use first section as fallback
                 }
 
-                // Create the question
-                $question = \App\Models\QuestionModel::create([
-                    'title' => $questionData['title'] ?? 'Pregunta sin título',
-                    'descrip' => $questionData['description'] ?? '',
-                    'validate' => ($questionData['mandatory'] ?? false) ? 'Requerido' : 'Opcional',
-                    'cod_padre' => 0, // Parent questions have cod_padre = 0
-                    'bank' => true, // Save to question bank for reuse
-                    'type_questions_id' => $questionData['questionType'] ?? 1,
-                    'creator_id' => Auth::id(),
-                    'questions_conditions' => false, // Parent questions don't have conditions
-                    'section_id' => $sectionId
-                ]);
+                // MEJORA CRÍTICA: Verificar si la pregunta ya existe antes de crearla
+                $existingQuestion = \App\Models\QuestionModel::where('title', $questionData['title'] ?? 'Pregunta sin título')
+                    ->where('type_questions_id', $questionData['questionType'] ?? 1)
+                    ->where('creator_id', Auth::id())
+                    ->where('cod_padre', 0)
+                    ->where('bank', true)
+                    ->first();
+
+                if ($existingQuestion) {
+                    // Reutilizar pregunta existente y actualizar section_id si es necesario
+                    if ($existingQuestion->section_id !== $sectionId) {
+                        $existingQuestion->section_id = $sectionId;
+                        $existingQuestion->save();
+                        \Log::info("TemporarySurveyController::publish - Updated section_id for existing question ID: {$existingQuestion->id}");
+                    }
+                    $question = $existingQuestion;
+                    \Log::info("TemporarySurveyController::publish - Reusing existing parent question ID: {$question->id}");
+                } else {
+                    // Create the question
+                    $question = \App\Models\QuestionModel::create([
+                        'title' => $questionData['title'] ?? 'Pregunta sin título',
+                        'descrip' => $questionData['description'] ?? '',
+                        'validate' => ($questionData['mandatory'] ?? false) ? 'Requerido' : 'Opcional',
+                        'cod_padre' => 0, // Parent questions have cod_padre = 0
+                        'bank' => true, // Save to question bank for reuse
+                        'type_questions_id' => $questionData['questionType'] ?? 1,
+                        'creator_id' => Auth::id(),
+                        'questions_conditions' => false, // Parent questions don't have conditions
+                        'section_id' => $sectionId
+                    ]);
+                    \Log::info("TemporarySurveyController::publish - Created new parent question ID: {$question->id}");
+                }
 
                 // Map temporary ID to permanent ID
                 if (isset($questionData['id'])) {
                     $questionIdMap[$questionData['id']] = $question->id;
                 }
 
-                \Log::info("TemporarySurveyController::publish - Created parent question ID: {$question->id} for temp ID: " . ($questionData['id'] ?? 'unknown'));
+                // Verificar si ya existe la relación survey-question antes de crearla
+                $existingRelation = \App\Models\SurveyquestionsModel::where('survey_id', $survey->id)
+                    ->where('question_id', $question->id)
+                    ->first();
 
-                // Create survey-question relationship for parent question
-                \App\Models\SurveyquestionsModel::create([
-                    'survey_id' => $survey->id,
-                    'question_id' => $question->id,
-                    'section_id' => $sectionId,
-                    'creator_id' => Auth::id(),
-                    'status' => true,
-                    'user_id' => Auth::id()
-                ]);
+                if (!$existingRelation) {
+                    // Create survey-question relationship for parent question
+                    \App\Models\SurveyquestionsModel::create([
+                        'survey_id' => $survey->id,
+                        'question_id' => $question->id,
+                        'section_id' => $sectionId,
+                        'creator_id' => Auth::id(),
+                        'status' => true,
+                        'user_id' => Auth::id()
+                    ]);
+                    \Log::info("TemporarySurveyController::publish - Created survey-question relationship for question ID: {$question->id}");
+                } else {
+                    \Log::info("TemporarySurveyController::publish - Survey-question relationship already exists for question ID: {$question->id}");
+                }
 
                 // 4. CRITICAL: Transfer custom options
                 if (isset($questionData['options']) && is_array($questionData['options']) && count($questionData['options']) > 0) {
@@ -526,36 +571,64 @@ class TemporarySurveyController extends Controller
                     $sectionId = array_values($sectionIdMap)[0];
                 }
 
-                // Create the child question
-                $childQuestion = \App\Models\QuestionModel::create([
-                    'title' => $questionData['title'] ?? 'Pregunta hija sin título',
-                    'descrip' => $questionData['description'] ?? '',
-                    'validate' => ($questionData['mandatory'] ?? false) ? 'Requerido' : 'Opcional',
-                    'cod_padre' => $parentId, // Map to actual parent question ID
-                    'bank' => true, // Save to question bank for reuse
-                    'type_questions_id' => $questionData['questionType'] ?? 1,
-                    'creator_id' => Auth::id(),
-                    'questions_conditions' => true, // Child questions have conditions
-                    'mother_answer_condition' => $questionData['mother_answer_condition'] ?? $questionData['condition'] ?? null,
-                    'section_id' => $sectionId
-                ]);
+                // MEJORA CRÍTICA: Verificar si la pregunta hija ya existe antes de crearla
+                $existingChildQuestion = \App\Models\QuestionModel::where('title', $questionData['title'] ?? 'Pregunta hija sin título')
+                    ->where('type_questions_id', $questionData['questionType'] ?? 1)
+                    ->where('creator_id', Auth::id())
+                    ->where('cod_padre', $parentId)
+                    ->where('bank', true)
+                    ->first();
+
+                if ($existingChildQuestion) {
+                    // Reutilizar pregunta existente y actualizar section_id si es necesario
+                    if ($existingChildQuestion->section_id !== $sectionId) {
+                        $existingChildQuestion->section_id = $sectionId;
+                        $existingChildQuestion->save();
+                        \Log::info("TemporarySurveyController::publish - Updated section_id for existing child question ID: {$existingChildQuestion->id}");
+                    }
+                    $childQuestion = $existingChildQuestion;
+                    \Log::info("TemporarySurveyController::publish - Reusing existing child question ID: {$childQuestion->id}");
+                } else {
+                    // Create the child question
+                    $childQuestion = \App\Models\QuestionModel::create([
+                        'title' => $questionData['title'] ?? 'Pregunta hija sin título',
+                        'descrip' => $questionData['description'] ?? '',
+                        'validate' => ($questionData['mandatory'] ?? false) ? 'Requerido' : 'Opcional',
+                        'cod_padre' => $parentId, // Map to actual parent question ID
+                        'bank' => true, // Save to question bank for reuse
+                        'type_questions_id' => $questionData['questionType'] ?? 1,
+                        'creator_id' => Auth::id(),
+                        'questions_conditions' => true, // Child questions have conditions
+                        'mother_answer_condition' => $questionData['mother_answer_condition'] ?? $questionData['condition'] ?? null,
+                        'section_id' => $sectionId
+                    ]);
+                    \Log::info("TemporarySurveyController::publish - Created new child question ID: {$childQuestion->id}");
+                }
 
                 // Map temporary ID to permanent ID for this child question too
                 if (isset($questionData['id'])) {
                     $questionIdMap[$questionData['id']] = $childQuestion->id;
                 }
 
-                \Log::info("TemporarySurveyController::publish - Created child question ID: {$childQuestion->id} with parent ID: {$parentId}");
+                // Verificar si ya existe la relación survey-question antes de crearla
+                $existingChildRelation = \App\Models\SurveyquestionsModel::where('survey_id', $survey->id)
+                    ->where('question_id', $childQuestion->id)
+                    ->first();
 
-                // Create survey-question relationship for child question
-                \App\Models\SurveyquestionsModel::create([
-                    'survey_id' => $survey->id,
-                    'question_id' => $childQuestion->id,
-                    'section_id' => $sectionId,
-                    'creator_id' => Auth::id(),
-                    'status' => true,
-                    'user_id' => Auth::id()
-                ]);
+                if (!$existingChildRelation) {
+                    // Create survey-question relationship for child question
+                    \App\Models\SurveyquestionsModel::create([
+                        'survey_id' => $survey->id,
+                        'question_id' => $childQuestion->id,
+                        'section_id' => $sectionId,
+                        'creator_id' => Auth::id(),
+                        'status' => true,
+                        'user_id' => Auth::id()
+                    ]);
+                    \Log::info("TemporarySurveyController::publish - Created survey-question relationship for child question ID: {$childQuestion->id}");
+                } else {
+                    \Log::info("TemporarySurveyController::publish - Survey-question relationship already exists for child question ID: {$childQuestion->id}");
+                }
 
                 // Transfer custom options for child question
                 if (isset($questionData['options']) && is_array($questionData['options']) && count($questionData['options']) > 0) {
@@ -701,22 +774,22 @@ class TemporarySurveyController extends Controller
     {
         try {
             $userId = Auth::id();
-            
+
             // Obtener estado actual
             $beforeCount = TemporarySurveyModel::where('user_id', $userId)
                 ->where('status', 'draft')
                 ->count();
-            
+
             // Ejecutar consolidación
             $this->consolidateDuplicateTemporarySurveys($userId);
-            
+
             // Verificar resultado
             $afterCount = TemporarySurveyModel::where('user_id', $userId)
                 ->where('status', 'draft')
                 ->count();
-            
+
             $cleaned = $beforeCount - $afterCount;
-            
+
             return response()->json([
                 'success' => true,
                 'message' => 'Duplicados limpiados exitosamente',
@@ -726,11 +799,239 @@ class TemporarySurveyController extends Controller
                     'cleaned_count' => $cleaned
                 ]
             ]);
-            
+
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Error limpiando duplicados: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Limpiar preguntas huérfanas (sin relación en survey_questions)
+     * Útil para eliminar preguntas duplicadas que quedaron sin usar
+     */
+    public function cleanupOrphanQuestions(Request $request)
+    {
+        try {
+            $userId = Auth::id();
+
+            // Buscar preguntas del usuario que no tienen relación en survey_questions
+            $orphanQuestions = \App\Models\QuestionModel::where('creator_id', $userId)
+                ->whereDoesntHave('surveyQuestions')
+                ->get();
+
+            $beforeCount = $orphanQuestions->count();
+
+            if ($beforeCount === 0) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'No se encontraron preguntas huérfanas',
+                    'data' => [
+                        'orphan_questions_count' => 0,
+                        'deleted_count' => 0
+                    ]
+                ]);
+            }
+
+            // Registrar preguntas a eliminar para auditoría
+            $deletedQuestions = [];
+            foreach ($orphanQuestions as $question) {
+                $deletedQuestions[] = [
+                    'id' => $question->id,
+                    'title' => $question->title,
+                    'section_id' => $question->section_id,
+                    'created_at' => $question->created_at
+                ];
+            }
+
+            // Eliminar opciones de las preguntas huérfanas primero (integridad referencial)
+            foreach ($orphanQuestions as $question) {
+                \App\Models\QuestionsoptionsModel::where('questions_id', $question->id)->delete();
+            }
+
+            // Eliminar las preguntas huérfanas
+            $deletedCount = \App\Models\QuestionModel::where('creator_id', $userId)
+                ->whereDoesntHave('surveyQuestions')
+                ->delete();
+
+            \Log::info('Orphan questions cleanup completed', [
+                'user_id' => $userId,
+                'deleted_count' => $deletedCount,
+                'deleted_questions' => $deletedQuestions
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Preguntas huérfanas limpiadas exitosamente',
+                'data' => [
+                    'orphan_questions_count' => $beforeCount,
+                    'deleted_count' => $deletedCount,
+                    'deleted_questions' => $deletedQuestions
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('Error cleaning orphan questions: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Error limpiando preguntas huérfanas: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Limpiar secciones duplicadas
+     * Consolida secciones con el mismo título donde una está en el banco (id_survey NULL)
+     * y otra está vinculada a una encuesta (id_survey NOT NULL)
+     */
+    public function cleanupDuplicateSections(Request $request)
+    {
+        try {
+            $userName = Auth::user()->name ?? Auth::user()->email ?? 'system';
+
+            \DB::beginTransaction();
+
+            // Encontrar secciones duplicadas: mismo título, una en banco y otra en survey
+            $duplicateSections = \DB::select("
+                SELECT
+                    s1.id as bank_section_id,
+                    s1.title as section_title,
+                    s2.id as survey_section_id,
+                    s2.id_survey as survey_id
+                FROM \"Produc\".sections s1
+                INNER JOIN \"Produc\".sections s2 ON s1.title = s2.title
+                WHERE s1.id_survey IS NULL
+                AND s2.id_survey IS NOT NULL
+                AND s1.user_create = ?
+                AND s2.user_create = ?
+                ORDER BY s1.title, s2.id_survey
+            ", [$userName, $userName]);
+
+            if (empty($duplicateSections)) {
+                \DB::commit();
+                return response()->json([
+                    'success' => true,
+                    'message' => 'No se encontraron secciones duplicadas',
+                    'data' => [
+                        'duplicate_sections_count' => 0,
+                        'consolidated_count' => 0
+                    ]
+                ]);
+            }
+
+            $consolidatedSections = [];
+            $migratedQuestions = 0;
+
+            foreach ($duplicateSections as $duplicate) {
+                $bankSectionId = $duplicate->bank_section_id;
+                $surveySectionId = $duplicate->survey_section_id;
+                $surveyId = $duplicate->survey_id;
+                $sectionTitle = $duplicate->section_title;
+
+                \Log::info("Consolidating duplicate section: '{$sectionTitle}'", [
+                    'bank_section_id' => $bankSectionId,
+                    'survey_section_id' => $surveySectionId,
+                    'survey_id' => $surveyId
+                ]);
+
+                // 1. Migrar preguntas de la sección survey a la sección banco
+                $questionsToMigrate = \App\Models\QuestionModel::where('section_id', $surveySectionId)->get();
+
+                foreach ($questionsToMigrate as $question) {
+                    // Verificar si ya existe una pregunta idéntica en la sección del banco
+                    $existingBankQuestion = \App\Models\QuestionModel::where('section_id', $bankSectionId)
+                        ->where('title', $question->title)
+                        ->where('type_questions_id', $question->type_questions_id)
+                        ->where('creator_id', $question->creator_id)
+                        ->first();
+
+                    if ($existingBankQuestion) {
+                        // Actualizar survey_questions para usar la pregunta del banco
+                        \DB::table('survey_questions')
+                            ->where('question_id', $question->id)
+                            ->where('survey_id', $surveyId)
+                            ->update([
+                                'question_id' => $existingBankQuestion->id,
+                                'section_id' => $bankSectionId
+                            ]);
+
+                        // Eliminar la pregunta duplicada
+                        \App\Models\QuestionsoptionsModel::where('questions_id', $question->id)->delete();
+                        $question->delete();
+
+                        \Log::info("Merged duplicate question to bank", [
+                            'deleted_question_id' => $question->id,
+                            'kept_bank_question_id' => $existingBankQuestion->id,
+                            'title' => $question->title
+                        ]);
+                    } else {
+                        // Mover pregunta a la sección del banco
+                        $question->section_id = $bankSectionId;
+                        $question->save();
+
+                        // Actualizar survey_questions
+                        \DB::table('survey_questions')
+                            ->where('question_id', $question->id)
+                            ->where('survey_id', $surveyId)
+                            ->update(['section_id' => $bankSectionId]);
+
+                        \Log::info("Migrated question to bank section", [
+                            'question_id' => $question->id,
+                            'from_section' => $surveySectionId,
+                            'to_section' => $bankSectionId
+                        ]);
+                    }
+
+                    $migratedQuestions++;
+                }
+
+                // 2. Eliminar la sección duplicada del survey
+                $deletedSection = \App\Models\SectionModel::find($surveySectionId);
+                if ($deletedSection) {
+                    $deletedSection->delete();
+                    \Log::info("Deleted duplicate survey section", [
+                        'section_id' => $surveySectionId,
+                        'title' => $sectionTitle,
+                        'survey_id' => $surveyId
+                    ]);
+                }
+
+                $consolidatedSections[] = [
+                    'section_title' => $sectionTitle,
+                    'bank_section_id' => $bankSectionId,
+                    'deleted_section_id' => $surveySectionId,
+                    'survey_id' => $surveyId
+                ];
+            }
+
+            \DB::commit();
+
+            \Log::info('Duplicate sections cleanup completed', [
+                'user' => $userName,
+                'consolidated_count' => count($consolidatedSections),
+                'migrated_questions' => $migratedQuestions
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Secciones duplicadas consolidadas exitosamente',
+                'data' => [
+                    'duplicate_sections_count' => count($duplicateSections),
+                    'consolidated_count' => count($consolidatedSections),
+                    'migrated_questions' => $migratedQuestions,
+                    'consolidated_sections' => $consolidatedSections
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            \DB::rollback();
+            \Log::error('Error cleaning duplicate sections: ' . $e->getMessage());
+            \Log::error('Stack trace: ' . $e->getTraceAsString());
+            return response()->json([
+                'success' => false,
+                'message' => 'Error limpiando secciones duplicadas: ' . $e->getMessage()
             ], 500);
         }
     }
