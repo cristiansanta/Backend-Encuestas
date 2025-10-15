@@ -100,48 +100,78 @@ class SectionController extends Controller
     try {
         // Usar transacción para evitar problemas de concurrencia
         return DB::transaction(function () use ($data, $user) {
-            // MEJORADO: Verificar si ya existe un registro con los mismos datos clave usando lógica más robusta
-            $query = SectionModel::where(function($q) use ($data) {
-                                    // Manejar id_survey que puede ser null para secciones banco
+            $normalizedTitle = strtolower(preg_replace('/\s+/', ' ', trim($data['title'])));
+
+            // CRÍTICO: SIEMPRE verificar primero si existe en el banco (id_survey = NULL)
+            $bankSection = SectionModel::whereNull('id_survey')
+                                 ->whereRaw('LOWER(REGEXP_REPLACE(TRIM(title), \'[[:space:]]+\', \' \', \'g\')) = ?', [$normalizedTitle])
+                                 ->where('user_create', $user->name)
+                                 ->lockForUpdate()
+                                 ->first();
+
+            if ($bankSection) {
+                // La sección YA EXISTE en el banco - NO crear duplicado
+                // SIEMPRE usar la del banco independientemente del id_survey solicitado
+                \Log::info('Section already exists in bank - preventing duplication', [
+                    'bank_section_id' => $bankSection->id,
+                    'section_title' => $bankSection->title,
+                    'requested_survey_id' => $data['id_survey'] ?? null,
+                    'user' => $user->name
+                ]);
+
+                return response()->json([
+                    'message' => 'La sección ya existe en el banco de preguntas',
+                    'section_id' => $bankSection->id,
+                    'already_exists' => true,
+                    'existing_title' => $bankSection->title,
+                    'requested_title' => $data['title'],
+                    'from_bank' => true
+                ], 200);
+            }
+
+            // SEGUNDO: Verificar si ya existe con el mismo id_survey solicitado
+            $existingSurveySection = SectionModel::where(function($q) use ($data) {
                                     if (isset($data['id_survey']) && $data['id_survey'] !== null) {
                                         $q->where('id_survey', $data['id_survey']);
                                     } else {
                                         $q->whereNull('id_survey');
                                     }
                                  })
-                                 ->where(function($q) use ($data) {
-                                    // Verificar por título con normalización mejorada (case-insensitive y whitespace)
-                                    $normalizedTitle = strtolower(preg_replace('/\s+/', ' ', trim($data['title'])));
-                                    $q->whereRaw('LOWER(REGEXP_REPLACE(TRIM(title), \'[[:space:]]+\', \' \', \'g\')) = ?', [$normalizedTitle]);
-                                 })
-                                 ->where('user_create', $user->name) // Filtrar por usuario para la lógica de inteligencia de negocio
-                                 ->lockForUpdate(); // Bloquear para evitar inserciones simultáneas
-            
-            $existingsections = $query->first();
+                                 ->whereRaw('LOWER(REGEXP_REPLACE(TRIM(title), \'[[:space:]]+\', \' \', \'g\')) = ?', [$normalizedTitle])
+                                 ->where('user_create', $user->name)
+                                 ->lockForUpdate()
+                                 ->first();
 
-            if ($existingsections) {
-                // Si el registro ya existe, devolver el ID existente para evitar duplicados
-                $response = [
-                    'message' => 'La seccion ya fue creada exitosamente (duplicado detectado)',
-                    'section_id' => $existingsections->id,
-                    'already_exists' => true,
-                    'existing_title' => $existingsections->title,
-                    'requested_title' => $data['title']
-                ];
-                
-                // Log para debugging
-                \Log::info('Section duplicate detected', [
-                    'existing_id' => $existingsections->id,
-                    'existing_title' => $existingsections->title,
+            if ($existingSurveySection) {
+                \Log::info('Section duplicate detected with same survey_id', [
+                    'existing_id' => $existingSurveySection->id,
+                    'existing_title' => $existingSurveySection->title,
                     'requested_title' => $data['title'],
                     'survey_id' => $data['id_survey'] ?? null
                 ]);
-                
-                return response()->json($response, 200);
+
+                return response()->json([
+                    'message' => 'La sección ya fue creada exitosamente (duplicado detectado)',
+                    'section_id' => $existingSurveySection->id,
+                    'already_exists' => true,
+                    'existing_title' => $existingSurveySection->title,
+                    'requested_title' => $data['title']
+                ], 200);
             }
 
-            // Crear una nueva sections en la base de datos
-            $section = SectionModel::create($data);
+            // TERCERO: Solo crear nueva sección si NO existe ni en banco ni con el survey_id solicitado
+            // IMPORTANTE: Las nuevas secciones se crean SIN id_survey (en el banco) para poder reutilizarlas
+            $dataToCreate = $data;
+            $dataToCreate['id_survey'] = null; // CRÍTICO: Siempre crear en el banco
+
+            $section = SectionModel::create($dataToCreate);
+
+            \Log::info('New section created in bank', [
+                'section_id' => $section->id,
+                'title' => $section->title,
+                'originally_requested_survey_id' => $data['id_survey'] ?? null,
+                'created_with_survey_id' => null
+            ]);
 
             // Preparar la respuesta
             $response = [

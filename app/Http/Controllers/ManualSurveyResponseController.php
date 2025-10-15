@@ -91,9 +91,11 @@ class ManualSurveyResponseController extends Controller
             }
 
             // MEJORADO: Buscar primero si existe una notificación enviada para este email y encuesta
+            // CRÍTICO: Aceptar múltiples estados para soportar reenvíos
             $existingNotification = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
                 ->where('destinatario', $data['respondent_email'])
-                ->where('state', '1') // Solo buscar notificaciones enviadas (state = '1')
+                ->whereIn('state', ['1', 'pending_response', 'sent', 'enviado', 'enviada']) // ✅ SOLUCIÓN: Aceptar múltiples estados
+                ->orderBy('date_insert', 'desc') // Obtener la más reciente
                 ->first();
 
             if ($existingNotification) {
@@ -604,9 +606,11 @@ class ManualSurveyResponseController extends Controller
             // CORREGIDO: Buscar y actualizar registro existente en lugar de crear duplicados
             if (!empty($data['token'])) {
                 // Para respuestas con token (desde email), buscar y actualizar el registro existente
+                // CRÍTICO: Aceptar múltiples estados para soportar reenvíos
                 $existingNotification = NotificationSurvaysModel::where('id_survey', $data['survey_id'])
                     ->where('destinatario', $data['respondent_email'])
-                    ->where('state', '1') // Solo buscar notificaciones enviadas (state = '1')
+                    ->whereIn('state', ['1', 'pending_response', 'sent', 'enviado', 'enviada']) // ✅ SOLUCIÓN: Aceptar múltiples estados
+                    ->orderBy('date_insert', 'desc') // Obtener la más reciente
                     ->first();
 
                 if ($existingNotification) {

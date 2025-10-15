@@ -250,7 +250,7 @@ class SurveyEmailController extends Controller
             // Limpiar caracteres especiales del hash para URL
             $hash = str_replace(['+', '/', '='], ['', '', ''], $hash);
 
-            $surveyUrl = config('app.frontend_url', 'http://149.130.180.163:5173') .
+            $surveyUrl = config('app.frontend_url', 'http://localhost:5173') .
                         '/encuestados/survey-view-manual/' . $data['survey_id'] .
                         '?email=' . urlencode($data['email']) . '&hash=' . $hash;
 
@@ -622,9 +622,14 @@ class SurveyEmailController extends Controller
             // Usar transacción para asegurar consistencia entre tablas
             \DB::transaction(function() use ($surveyId, $tokenData, $respondentName, $responses) {
                 // CORREGIDO: Buscar y actualizar el registro existente en lugar de crear uno nuevo
+                // CRÍTICO: Aceptar múltiples estados para soportar reenvíos
+                // - '1' = envío original
+                // - 'pending_response' = reenvío esperando respuesta
+                // - 'sent' = otros tipos de envíos
                 $existingNotification = NotificationSurvaysModel::where('id_survey', $surveyId)
                     ->where('destinatario', $tokenData['email'])
-                    ->where('state', '1') // Buscar notificaciones enviadas (state = '1')
+                    ->whereIn('state', ['1', 'pending_response', 'sent', 'enviado', 'enviada']) // ✅ SOLUCIÓN: Aceptar múltiples estados
+                    ->orderBy('date_insert', 'desc') // Obtener la más reciente (último reenvío)
                     ->first();
 
                 if ($existingNotification) {

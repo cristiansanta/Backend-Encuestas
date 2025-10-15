@@ -158,35 +158,45 @@ public function store(Request $request)
         }
     }
 
-    // MEJORADO: Verificar si ya existe un registro similar para este usuario
-    // NUEVO: Omitir validación de duplicados si la pregunta está siendo importada del banco
+    // CRÍTICO: SIEMPRE verificar duplicados, incluso para preguntas del banco
+    // La detección de duplicados debe aplicarse a TODAS las preguntas
     $existingQuestion = null;
-    
-    // Solo aplicar validación de duplicados si NO es una pregunta importada del banco
-    if (!isset($data['imported_from_bank']) || !$data['imported_from_bank']) {
-        // CORREGIDO: Para preguntas hijas, incluir cod_padre en la detección de duplicados
-        // Para preguntas padre (cod_padre = 0), mantener la lógica original
-        $duplicateQuery = QuestionModel::where('title', $data['title'])
-                                      ->where('descrip', $data['descrip'])
-                                      ->where('type_questions_id', $data['type_questions_id'])
-                                      ->where('creator_id', $user->id);
-        
-        // CRÍTICO: Para preguntas hijas (cod_padre > 0), incluir cod_padre en la búsqueda
-        if (isset($data['cod_padre']) && $data['cod_padre'] > 0) {
-            $duplicateQuery->where('cod_padre', $data['cod_padre']);
-            \Log::info('Child question duplicate check', [
-                'title' => $data['title'],
-                'cod_padre' => $data['cod_padre'],
-                'user_id' => $user->id
-            ]);
-        }
-        
-        $existingQuestion = $duplicateQuery->first();
-    } else {
-        \Log::info('Question imported from bank - skipping duplicate validation', [
+
+    // MEJORADO: Verificar duplicados por título, tipo, sección y usuario
+    $duplicateQuery = QuestionModel::where('title', $data['title'])
+                                  ->where('type_questions_id', $data['type_questions_id'])
+                                  ->where('creator_id', $user->id);
+
+    // CRÍTICO: Para preguntas del banco, incluir section_id en la búsqueda
+    if (isset($data['section_id']) && $data['section_id']) {
+        $duplicateQuery->where('section_id', $data['section_id']);
+    }
+
+    // CRÍTICO: Para preguntas hijas (cod_padre > 0), incluir cod_padre en la búsqueda
+    if (isset($data['cod_padre']) && $data['cod_padre'] > 0) {
+        $duplicateQuery->where('cod_padre', $data['cod_padre']);
+        \Log::info('Child question duplicate check', [
             'title' => $data['title'],
-            'user_id' => $user->id,
-            'imported_from_bank' => true
+            'cod_padre' => $data['cod_padre'],
+            'section_id' => $data['section_id'] ?? null,
+            'user_id' => $user->id
+        ]);
+    }
+
+    // CRÍTICO: Para preguntas del banco, también verificar por bank = true
+    if (isset($data['bank']) && $data['bank'] === true) {
+        $duplicateQuery->where('bank', true);
+    }
+
+    $existingQuestion = $duplicateQuery->first();
+
+    if ($existingQuestion) {
+        \Log::info('Question already exists - preventing duplication', [
+            'existing_id' => $existingQuestion->id,
+            'title' => $data['title'],
+            'section_id' => $data['section_id'] ?? null,
+            'bank' => $data['bank'] ?? false,
+            'imported_from_bank' => $data['imported_from_bank'] ?? false
         ]);
     }
     
@@ -237,42 +247,17 @@ public function store(Request $request)
             ]);
             
         } else {
-            // Para preguntas padre: SKIP UPDATE LOGIC IF QUESTION IS FOR BANK
-            if (isset($data['bank']) && $data['bank'] === true) {
-                \Log::info('BANK_QUESTION: Skipping update logic for bank question - allowing new creation', [
-                    'user_id' => $user->id,
-                    'title' => $data['title'],
-                    'bank' => $data['bank']
-                ]);
-                // No buscar preguntas para actualizar - siempre crear nuevas para el banco
-                $questionToUpdate = null;
-            } else {
-                // Para preguntas NO del banco: buscar preguntas padre existentes del usuario
-                $parentQuestions = QuestionModel::where('creator_id', $user->id)
-                                               ->where('cod_padre', 0)
-                                               ->get();
-                
-                \Log::info('NEVER_CREATE: Parent questions found for update', [
-                    'parent_questions_count' => $parentQuestions->count(),
-                    'parent_question_ids' => $parentQuestions->pluck('id')->toArray(),
-                    'parent_question_titles' => $parentQuestions->pluck('title')->toArray()
-                ]);
-                
-                // Prioridad 1: Buscar por sección si viene section_id
-                if (isset($data['section_id']) && $data['section_id']) {
-                    $questionToUpdate = $parentQuestions->where('section_id', $data['section_id'])->first();
-                }
-                
-                // Prioridad 2: Buscar por tipo de pregunta
-                if (!$questionToUpdate && isset($data['type_questions_id'])) {
-                    $questionToUpdate = $parentQuestions->where('type_questions_id', $data['type_questions_id'])->first();
-                }
-                
-                // Prioridad 3: Tomar la primera pregunta padre disponible
-                if (!$questionToUpdate) {
-                    $questionToUpdate = $parentQuestions->first();
-                }
-            }
+            // Para preguntas padre: NO aplicar lógica de actualización automática
+            // Las preguntas padre del banco son únicas y no deben actualizarse automáticamente
+            // Solo se debe verificar duplicados (ya hecho arriba)
+            $questionToUpdate = null;
+
+            \Log::info('Parent question - no automatic update logic', [
+                'user_id' => $user->id,
+                'title' => $data['title'],
+                'bank' => $data['bank'] ?? false,
+                'section_id' => $data['section_id'] ?? null
+            ]);
             
             \Log::info('NEVER_CREATE: Parent question selected for update', [
                 'selected_question_id' => $questionToUpdate ? $questionToUpdate->id : null,

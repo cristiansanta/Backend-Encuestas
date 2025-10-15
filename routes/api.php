@@ -305,6 +305,9 @@ Route::middleware(['debug.auth', 'auth:sanctum'])->group(function () {
         Route::delete('/{id}', 'destroy')->name('temporary-surveys.destroy');
         Route::post('/auto-save', 'autoSave')->name('temporary-surveys.auto-save');
         Route::post('/{id}/publish', 'publish')->name('temporary-surveys.publish');
+        Route::post('/cleanup-duplicates', 'cleanupDuplicates')->name('temporary-surveys.cleanup-duplicates');
+        Route::post('/cleanup-orphan-questions', 'cleanupOrphanQuestions')->name('temporary-surveys.cleanup-orphan-questions');
+        Route::post('/cleanup-duplicate-sections', 'cleanupDuplicateSections')->name('temporary-surveys.cleanup-duplicate-sections');
     });
     
     Route::prefix('Conditions')->controller(ConditionsController::class)->group(function () {
