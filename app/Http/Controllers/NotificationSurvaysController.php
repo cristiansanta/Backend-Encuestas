@@ -568,7 +568,7 @@ class NotificationSurvaysController extends Controller
                     }
 
                     // Generar la URL de la encuesta
-                    $surveyUrl = config('app.frontend_url', 'http://localhost:5173') .
+                    $surveyUrl = config('app.frontend_url', 'http://149.130.180.163:5173') .
                                 '/encuestados/survey-view-manual/' . $surveyId .
                                 '?token=' . urlencode($encryptedToken);
 
@@ -1121,7 +1121,7 @@ class NotificationSurvaysController extends Controller
             }
 
             // Generar la URL de la encuesta
-            $surveyUrl = config('app.frontend_url', 'http://localhost:5173') .
+            $surveyUrl = config('app.frontend_url', 'http://149.130.180.163:5173') .
                         '/encuestados/survey-view-manual/' . $surveyId .
                         '?token=' . urlencode($encryptedToken);
 
