@@ -1426,7 +1426,32 @@ class URLIntegrityService
                 ->first();
 
             if (!$accessToken) {
-                // PRIMER ACCESO: Registrar este usuario
+                // SEGURIDAD CRÍTICA: Verificar si este hash ya existe para OTRO usuario
+                // Esto previene que Usuario B use el enlace de Usuario A
+                $existingHashForOtherUser = SurveyAccessToken::where('survey_id', $surveyId)
+                    ->where('hash', $providedHash)
+                    ->where('email', '!=', $decodedEmail)
+                    ->first();
+
+                if ($existingHashForOtherUser) {
+                    // INTENTO DE LINK SHARING DETECTADO
+                    Log::warning('🚨 LINK SHARING BLOCKED: Hash already used by different user', [
+                        'survey_id' => $surveyId,
+                        'attempting_email' => $decodedEmail,
+                        'original_email' => $existingHashForOtherUser->email,
+                        'hash' => substr($providedHash, 0, 16) . '...',
+                        'original_user_ip' => $existingHashForOtherUser->ip_address,
+                        'current_ip' => $request->ip(),
+                        'security_event' => 'LINK_SHARING_ATTEMPT'
+                    ]);
+
+                    // Bloquear el hash original como medida de seguridad
+                    $existingHashForOtherUser->blockAccess();
+
+                    return ['valid' => false, 'error_type' => 'link_sharing'];
+                }
+
+                // PRIMER ACCESO: Registrar este usuario (hash no existe previamente)
                 $accessToken = SurveyAccessToken::registerFirstAccess(
                     $surveyId,
                     $decodedEmail,
@@ -1436,12 +1461,12 @@ class URLIntegrityService
                     $request->userAgent()
                 );
 
-                Log::info('🔐 FIRST ACCESS: User registered for survey (network-friendly)', [
+                Log::info('🔐 FIRST ACCESS: User registered for survey', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'device_fingerprint' => $currentFingerprint,
                     'ip' => $request->ip(),
-                    'note' => 'Multiple users from same network are allowed',
+                    'note' => 'New user access registered',
                     'access_token_id' => $accessToken->id
                 ]);
 
@@ -1461,21 +1486,19 @@ class URLIntegrityService
                 return ['valid' => false, 'error_type' => 'link_blocked'];
             }
 
-            // MONITOREO: Detectar cambios de dispositivo (SOLO para logs, NO bloquear)
+            // ACTUALIZAR DISPOSITIVO: Permitir que el mismo usuario acceda desde cualquier dispositivo
             if (!$accessToken->isDeviceMatch($currentFingerprint)) {
-                Log::info('ℹ️ Device fingerprint changed (allowed - network-friendly policy)', [
+                Log::info('ℹ️ Device fingerprint changed - updating to new device', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'original_device' => $accessToken->device_fingerprint,
                     'current_device' => $currentFingerprint,
-                    'original_ip' => $accessToken->ip_address,
-                    'current_ip' => $request->ip(),
-                    'note' => 'Could be legitimate: different browser, network change, or shared network',
-                    'action' => 'ALLOWED - not blocking',
+                    'note' => 'Same user from different device - allowed',
                     'access_token_id' => $accessToken->id
                 ]);
 
-                // Actualizar el fingerprint al actual (usuario puede cambiar de dispositivo)
+                // Actualizar el fingerprint al dispositivo actual
+                // El mismo usuario puede acceder desde diferentes dispositivos sin restricción
                 $accessToken->update([
                     'device_fingerprint' => $currentFingerprint,
                     'ip_address' => $request->ip(),
