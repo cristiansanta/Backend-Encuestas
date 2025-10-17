@@ -10,7 +10,8 @@ class URLIntegrityService
 {
     /**
      * Generar hash de integridad para URL usando HMAC para seguridad máxima
-     * INCLUYE: Fingerprinting del dispositivo para prevenir compartir enlaces
+     * NOTA: NO incluye device fingerprint para permitir acceso desde cualquier dispositivo
+     * La validación se hace por survey_id + email + hash únicamente
      *
      * @param int $surveyId
      * @param string $email
@@ -21,29 +22,29 @@ class URLIntegrityService
     {
         $timestamp = now()->timestamp;
 
-        // SEGURIDAD CRÍTICA: Incluir fingerprint del dispositivo para evitar compartir enlaces
-        $deviceFingerprint = self::generateDeviceFingerprint();
+        // NO incluir device fingerprint - permite acceso desde cualquier dispositivo/red
+        // La seguridad se basa en: survey_id + email + timestamp + HMAC
 
         // SEGURIDAD CRÍTICA: Usar HMAC con clave secreta para evitar falsificación
         $secretKey = env('APP_KEY', 'default-secret-key');
-        $dataToSign = "{$surveyId}|{$email}|{$type}|{$timestamp}|{$deviceFingerprint}";
+        $dataToSign = "{$surveyId}|{$email}|{$type}|{$timestamp}";
 
         // Generar HMAC SHA-256
         $hmac = hash_hmac('sha256', $dataToSign, $secretKey);
 
         // Combinar timestamp con HMAC para verificación temporal
-        $combinedHash = $timestamp . '.' . $deviceFingerprint . '.' . substr($hmac, 0, 24);
+        $combinedHash = $timestamp . '.' . substr($hmac, 0, 32);
 
         // Codificar en base64 URL-safe
         $urlSafeHash = rtrim(strtr(base64_encode($combinedHash), '+/', '-_'), '=');
 
-        Log::info('🔐 Secure hash generated with device fingerprint', [
+        Log::info('🔐 Secure hash generated (device-agnostic)', [
             'survey_id' => $surveyId,
             'email' => $email,
             'type' => $type,
-            'device_fingerprint' => $deviceFingerprint,
             'data_signed' => $dataToSign,
-            'hash_length' => strlen($urlSafeHash)
+            'hash_length' => strlen($urlSafeHash),
+            'note' => 'Device fingerprint NOT included - allows multiple users on same network'
         ]);
 
         return $urlSafeHash;
@@ -52,6 +53,7 @@ class URLIntegrityService
     /**
      * Generar fingerprint único del dispositivo/sesión
      * PREVIENE: Compartir enlaces entre diferentes dispositivos/usuarios
+     * IMPORTANTE: NO usa IP para permitir múltiples usuarios en la misma red
      *
      * @return string
      */
@@ -59,23 +61,22 @@ class URLIntegrityService
     {
         $request = request();
 
-        // ESTRATEGIA SIMPLIFICADA: Solo usar datos estables
-        // IP + User-Agent son suficientes para detectar dispositivos diferentes
-        // pero evitan problemas con headers variables
+        // ESTRATEGIA MEJORADA: Solo User-Agent sin IP
+        // Permite múltiples usuarios en la misma red corporativa/escuela
+        // La IP NO es un indicador confiable de "link sharing"
         $fingerprintData = [
-            'ip' => $request->ip(),
-            'user_agent' => $request->userAgent()
+            'user_agent' => $request->userAgent(),
+            // NO incluir IP - múltiples usuarios legítimos pueden compartir IP
         ];
 
-        // Generar hash único del dispositivo
+        // Generar hash único del dispositivo basado SOLO en User-Agent
         $fingerprintString = implode('|', $fingerprintData);
         $fingerprint = substr(hash('sha256', $fingerprintString), 0, 8);
 
-        Log::info('🔍 Device fingerprint generated (simplified)', [
+        Log::info('🔍 Device fingerprint generated (network-friendly)', [
             'fingerprint' => $fingerprint,
-            'ip' => $fingerprintData['ip'],
             'user_agent_length' => strlen($fingerprintData['user_agent']),
-            'user_agent_hash' => substr(hash('sha256', $fingerprintData['user_agent']), 0, 8)
+            'note' => 'IP not included - allows multiple users on same network'
         ]);
 
         return $fingerprint;
@@ -323,6 +324,7 @@ class URLIntegrityService
 
     /**
      * Validar hash HMAC con detalles del error (nuevo sistema)
+     * NUEVO: NO verifica device fingerprint, permite acceso desde cualquier dispositivo/red
      */
     private static function validateHMACHashWithDetails($surveyId, $decodedEmail, $providedHash)
     {
@@ -340,98 +342,90 @@ class URLIntegrityService
                 return ['valid' => false, 'error_type' => 'invalid_format'];
             }
 
-            // Separar timestamp, device fingerprint y HMAC
+            // Separar timestamp y HMAC
             $hashParts = explode('.', $decodedHash);
 
-            if (count($hashParts) === 3) {
-                // NUEVO FORMATO: timestamp.fingerprint.hmac
-                list($timestamp, $originalFingerprint, $providedHmac) = $hashParts;
+            $currentTime = now()->timestamp;
+            $secretKey = env('APP_KEY', 'default-secret-key');
+            $validTypes = ['standard', 'fallback', 'reminder'];
 
-                // SEGURIDAD CRÍTICA: Verificar device fingerprint
-                $currentFingerprint = self::generateDeviceFingerprint();
-
-                if ($originalFingerprint !== $currentFingerprint) {
-                    Log::warning('❌ CRITICAL: Device fingerprint mismatch - Link sharing detected', [
-                        'survey_id' => $surveyId,
-                        'email' => $decodedEmail,
-                        'original_fingerprint' => $originalFingerprint,
-                        'current_fingerprint' => $currentFingerprint,
-                        'ip' => request()->ip(),
-                        'user_agent' => request()->userAgent(),
-                        'security_event' => 'LINK_SHARING_DETECTED'
-                    ]);
-                    return ['valid' => false, 'error_type' => 'device_mismatch'];
-                }
-
-                // Validar que el timestamp no sea muy antiguo (máximo 24 horas)
-                $currentTime = now()->timestamp;
-                if ($currentTime - $timestamp > 24 * 60 * 60) {
-                    Log::warning('❌ HMAC hash expired', [
-                        'survey_id' => $surveyId,
-                        'email' => $decodedEmail,
-                        'hash_age_hours' => ($currentTime - $timestamp) / 3600,
-                        'ip' => request()->ip()
-                    ]);
-                    return ['valid' => false, 'error_type' => 'hash_expired'];
-                }
-
-                // VALIDACIÓN CRÍTICA: Verificar HMAC con fingerprint incluido
-                $secretKey = env('APP_KEY', 'default-secret-key');
-                $validTypes = ['standard', 'fallback', 'reminder'];
-
-                foreach ($validTypes as $type) {
-                    $dataToSign = "{$surveyId}|{$decodedEmail}|{$type}|{$timestamp}|{$originalFingerprint}";
-                    $expectedHmac = substr(hash_hmac('sha256', $dataToSign, $secretKey), 0, 24);
-
-                    if (hash_equals($expectedHmac, $providedHmac)) {
-                        Log::info('✅ HMAC validation successful with device verification', [
-                            'survey_id' => $surveyId,
-                            'email' => $decodedEmail,
-                            'type' => $type,
-                            'device_fingerprint' => $originalFingerprint,
-                            'hash_age_minutes' => ($currentTime - $timestamp) / 60,
-                            'ip' => request()->ip()
-                        ]);
-                        return ['valid' => true, 'error_type' => null];
-                    }
-                }
-
-            } else if (count($hashParts) === 2) {
-                // FORMATO LEGACY: timestamp.hmac (sin fingerprint)
+            // FORMATO NUEVO (2 partes): timestamp.hmac (sin device fingerprint)
+            if (count($hashParts) === 2) {
                 list($timestamp, $providedHmac) = $hashParts;
 
-                Log::info('🔍 Processing legacy HMAC hash (no device fingerprint)', [
+                Log::info('🔍 Processing HMAC hash (device-agnostic)', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
+                    'hash_format' => '2-part (timestamp.hmac)',
                     'ip' => request()->ip()
                 ]);
 
-                // Validar que el timestamp no sea muy antiguo (máximo 24 horas)
-                $currentTime = now()->timestamp;
-                if ($currentTime - $timestamp > 24 * 60 * 60) {
-                    Log::warning('❌ Legacy HMAC hash expired', [
+                // Validar que el timestamp no sea muy antiguo (máximo 7 días)
+                if ($currentTime - $timestamp > 7 * 24 * 60 * 60) {
+                    Log::warning('❌ HMAC hash expired', [
                         'survey_id' => $surveyId,
                         'email' => $decodedEmail,
-                        'hash_age_hours' => ($currentTime - $timestamp) / 3600,
+                        'hash_age_days' => ($currentTime - $timestamp) / (24 * 3600),
                         'ip' => request()->ip()
                     ]);
                     return ['valid' => false, 'error_type' => 'hash_expired'];
                 }
 
-                // VALIDACIÓN CRÍTICA: Verificar HMAC legacy (sin fingerprint)
-                $secretKey = env('APP_KEY', 'default-secret-key');
-                $validTypes = ['standard', 'fallback', 'reminder'];
-
+                // VALIDACIÓN: Verificar HMAC (sin fingerprint)
                 foreach ($validTypes as $type) {
                     $dataToSign = "{$surveyId}|{$decodedEmail}|{$type}|{$timestamp}";
                     $expectedHmac = substr(hash_hmac('sha256', $dataToSign, $secretKey), 0, 32);
 
                     if (hash_equals($expectedHmac, $providedHmac)) {
-                        Log::info('✅ Legacy HMAC validation successful', [
+                        Log::info('✅ HMAC validation successful (network-friendly)', [
                             'survey_id' => $surveyId,
                             'email' => $decodedEmail,
                             'type' => $type,
                             'hash_age_minutes' => ($currentTime - $timestamp) / 60,
+                            'note' => 'Device fingerprint not required - allows same network access',
+                            'ip' => request()->ip()
+                        ]);
+                        return ['valid' => true, 'error_type' => null];
+                    }
+                }
+            }
+
+            // FORMATO LEGACY (3 partes): timestamp.fingerprint.hmac (con device fingerprint)
+            // Mantener compatibilidad con enlaces antiguos
+            else if (count($hashParts) === 3) {
+                list($timestamp, $originalFingerprint, $providedHmac) = $hashParts;
+
+                Log::info('🔍 Processing legacy HMAC hash (with fingerprint - compatibility mode)', [
+                    'survey_id' => $surveyId,
+                    'email' => $decodedEmail,
+                    'hash_format' => '3-part (timestamp.fingerprint.hmac)',
+                    'note' => 'Legacy format - device fingerprint will be ignored for validation',
+                    'ip' => request()->ip()
+                ]);
+
+                // Validar que el timestamp no sea muy antiguo (máximo 7 días)
+                if ($currentTime - $timestamp > 7 * 24 * 60 * 60) {
+                    Log::warning('❌ Legacy HMAC hash expired', [
+                        'survey_id' => $surveyId,
+                        'email' => $decodedEmail,
+                        'hash_age_days' => ($currentTime - $timestamp) / (24 * 3600),
+                        'ip' => request()->ip()
+                    ]);
+                    return ['valid' => false, 'error_type' => 'hash_expired'];
+                }
+
+                // VALIDACIÓN: Verificar HMAC legacy (con fingerprint en la firma)
+                foreach ($validTypes as $type) {
+                    $dataToSign = "{$surveyId}|{$decodedEmail}|{$type}|{$timestamp}|{$originalFingerprint}";
+                    $expectedHmac = substr(hash_hmac('sha256', $dataToSign, $secretKey), 0, 24);
+
+                    if (hash_equals($expectedHmac, $providedHmac)) {
+                        Log::info('✅ Legacy HMAC validation successful (fingerprint not enforced)', [
+                            'survey_id' => $surveyId,
+                            'email' => $decodedEmail,
+                            'type' => $type,
+                            'hash_age_minutes' => ($currentTime - $timestamp) / 60,
+                            'note' => 'Legacy hash accepted - device fingerprint not enforced',
                             'ip' => request()->ip()
                         ]);
                         return ['valid' => true, 'error_type' => null];
@@ -443,6 +437,7 @@ class URLIntegrityService
                 'survey_id' => $surveyId,
                 'email' => $decodedEmail,
                 'provided_hash' => $providedHash,
+                'hash_parts_count' => count($hashParts),
                 'ip' => request()->ip()
             ]);
             return ['valid' => false, 'error_type' => 'hash_tampering'];
@@ -459,7 +454,7 @@ class URLIntegrityService
     }
 
     /**
-     * Validar hash HMAC (nuevo sistema)
+     * Validar hash HMAC (nuevo sistema - device-agnostic)
      */
     private static function validateHMACHash($surveyId, $decodedEmail, $providedHash)
     {
@@ -477,94 +472,67 @@ class URLIntegrityService
                 return false;
             }
 
-            // Separar timestamp, device fingerprint y HMAC
+            // Separar timestamp y HMAC
             $hashParts = explode('.', $decodedHash);
+            $currentTime = now()->timestamp;
+            $secretKey = env('APP_KEY', 'default-secret-key');
+            $validTypes = ['standard', 'fallback', 'reminder'];
 
-            if (count($hashParts) === 3) {
-                // NUEVO FORMATO: timestamp.fingerprint.hmac
-                list($timestamp, $originalFingerprint, $providedHmac) = $hashParts;
+            // FORMATO NUEVO (2 partes): timestamp.hmac (sin device fingerprint)
+            if (count($hashParts) === 2) {
+                list($timestamp, $providedHmac) = $hashParts;
 
-                // SEGURIDAD CRÍTICA: Verificar device fingerprint
-                $currentFingerprint = self::generateDeviceFingerprint();
-
-                if ($originalFingerprint !== $currentFingerprint) {
-                    Log::warning('❌ CRITICAL: Device fingerprint mismatch - Link sharing detected', [
-                        'survey_id' => $surveyId,
-                        'email' => $decodedEmail,
-                        'original_fingerprint' => $originalFingerprint,
-                        'current_fingerprint' => $currentFingerprint,
-                        'ip' => request()->ip(),
-                        'user_agent' => request()->userAgent(),
-                        'security_event' => 'LINK_SHARING_DETECTED'
-                    ]);
-                    return false;
-                }
-
-                // Validar que el timestamp no sea muy antiguo (máximo 24 horas)
-                $currentTime = now()->timestamp;
-                if ($currentTime - $timestamp > 24 * 60 * 60) {
+                // Validar que el timestamp no sea muy antiguo (máximo 7 días)
+                if ($currentTime - $timestamp > 7 * 24 * 60 * 60) {
                     Log::warning('❌ HMAC hash expired', [
                         'survey_id' => $surveyId,
                         'email' => $decodedEmail,
-                        'hash_age_hours' => ($currentTime - $timestamp) / 3600,
+                        'hash_age_days' => ($currentTime - $timestamp) / (24 * 3600),
                         'ip' => request()->ip()
                     ]);
                     return false;
                 }
 
-                // VALIDACIÓN CRÍTICA: Verificar HMAC con fingerprint incluido
-                $secretKey = env('APP_KEY', 'default-secret-key');
-                $validTypes = ['standard', 'fallback', 'reminder'];
-
+                // VALIDACIÓN: Verificar HMAC (sin fingerprint)
                 foreach ($validTypes as $type) {
-                    $dataToSign = "{$surveyId}|{$decodedEmail}|{$type}|{$timestamp}|{$originalFingerprint}";
-                    $expectedHmac = substr(hash_hmac('sha256', $dataToSign, $secretKey), 0, 24);
+                    $dataToSign = "{$surveyId}|{$decodedEmail}|{$type}|{$timestamp}";
+                    $expectedHmac = substr(hash_hmac('sha256', $dataToSign, $secretKey), 0, 32);
 
                     if (hash_equals($expectedHmac, $providedHmac)) {
-                        Log::info('✅ HMAC validation successful with device verification', [
+                        Log::info('✅ HMAC validation successful (network-friendly)', [
                             'survey_id' => $surveyId,
                             'email' => $decodedEmail,
                             'type' => $type,
-                            'device_fingerprint' => $originalFingerprint,
                             'hash_age_minutes' => ($currentTime - $timestamp) / 60,
                             'ip' => request()->ip()
                         ]);
                         return true;
                     }
                 }
+            }
 
-            } else if (count($hashParts) === 2) {
-                // FORMATO LEGACY: timestamp.hmac (sin fingerprint)
-                list($timestamp, $providedHmac) = $hashParts;
+            // FORMATO LEGACY (3 partes): timestamp.fingerprint.hmac (compatibilidad)
+            else if (count($hashParts) === 3) {
+                list($timestamp, $originalFingerprint, $providedHmac) = $hashParts;
 
-                Log::info('🔍 Processing legacy HMAC hash (no device fingerprint)', [
-                    'survey_id' => $surveyId,
-                    'email' => $decodedEmail,
-                    'ip' => request()->ip()
-                ]);
-
-                // Validar que el timestamp no sea muy antiguo (máximo 24 horas)
-                $currentTime = now()->timestamp;
-                if ($currentTime - $timestamp > 24 * 60 * 60) {
+                // Validar que el timestamp no sea muy antiguo (máximo 7 días)
+                if ($currentTime - $timestamp > 7 * 24 * 60 * 60) {
                     Log::warning('❌ Legacy HMAC hash expired', [
                         'survey_id' => $surveyId,
                         'email' => $decodedEmail,
-                        'hash_age_hours' => ($currentTime - $timestamp) / 3600,
+                        'hash_age_days' => ($currentTime - $timestamp) / (24 * 3600),
                         'ip' => request()->ip()
                     ]);
                     return false;
                 }
 
-                // VALIDACIÓN CRÍTICA: Verificar HMAC legacy (sin fingerprint)
-                $secretKey = env('APP_KEY', 'default-secret-key');
-                $validTypes = ['standard', 'fallback', 'reminder'];
-
+                // VALIDACIÓN: Verificar HMAC legacy (con fingerprint en firma)
                 foreach ($validTypes as $type) {
-                    $dataToSign = "{$surveyId}|{$decodedEmail}|{$type}|{$timestamp}";
-                    $expectedHmac = substr(hash_hmac('sha256', $dataToSign, $secretKey), 0, 32);
+                    $dataToSign = "{$surveyId}|{$decodedEmail}|{$type}|{$timestamp}|{$originalFingerprint}";
+                    $expectedHmac = substr(hash_hmac('sha256', $dataToSign, $secretKey), 0, 24);
 
                     if (hash_equals($expectedHmac, $providedHmac)) {
-                        Log::info('✅ Legacy HMAC validation successful', [
+                        Log::info('✅ Legacy HMAC validation successful (fingerprint not enforced)', [
                             'survey_id' => $surveyId,
                             'email' => $decodedEmail,
                             'type' => $type,
@@ -1435,8 +1403,9 @@ class URLIntegrityService
     }
 
     /**
-     * Validar acceso por dispositivo para prevenir compartir enlaces
-     * CRÍTICO: Registra el primer acceso y verifica que accesos posteriores sean del mismo dispositivo
+     * Validar acceso por email y hash únicamente
+     * IMPORTANTE: Permite múltiples usuarios desde la misma red
+     * ÚNICO BLOQUEO: Cuando el enlace es marcado manualmente como bloqueado
      *
      * @param int $surveyId
      * @param string $email
@@ -1450,14 +1419,14 @@ class URLIntegrityService
             $currentFingerprint = self::generateDeviceFingerprint();
             $request = request();
 
-            // Buscar si ya existe un registro de acceso para este enlace
+            // VALIDACIÓN PRINCIPAL: survey_id + email + hash (único por usuario)
             $accessToken = SurveyAccessToken::where('survey_id', $surveyId)
                 ->where('email', $decodedEmail)
                 ->where('hash', $providedHash)
                 ->first();
 
             if (!$accessToken) {
-                // PRIMER ACCESO: Registrar este dispositivo como el autorizado
+                // PRIMER ACCESO: Registrar este usuario
                 $accessToken = SurveyAccessToken::registerFirstAccess(
                     $surveyId,
                     $decodedEmail,
@@ -1467,62 +1436,63 @@ class URLIntegrityService
                     $request->userAgent()
                 );
 
-                Log::info('🔐 FIRST ACCESS: Device registered for survey link', [
+                Log::info('🔐 FIRST ACCESS: User registered for survey (network-friendly)', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'device_fingerprint' => $currentFingerprint,
                     'ip' => $request->ip(),
+                    'note' => 'Multiple users from same network are allowed',
                     'access_token_id' => $accessToken->id
                 ]);
 
                 return ['valid' => true, 'is_first_access' => true, 'access_token_id' => $accessToken->id];
             }
 
-            // ACCESO POSTERIOR: Verificar que sea el mismo dispositivo
+            // VERIFICAR BLOQUEO MANUAL
+            // Solo bloquear si fue marcado explícitamente como bloqueado
             if ($accessToken->status === 'blocked') {
-                Log::warning('❌ BLOCKED: Access attempt to blocked survey link', [
+                Log::warning('❌ BLOCKED: Access attempt to manually blocked survey link', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
-                    'current_fingerprint' => $currentFingerprint,
-                    'registered_fingerprint' => $accessToken->device_fingerprint,
                     'ip' => $request->ip(),
-                    'access_token_id' => $accessToken->id
+                    'access_token_id' => $accessToken->id,
+                    'note' => 'Link was manually blocked by administrator'
                 ]);
                 return ['valid' => false, 'error_type' => 'link_blocked'];
             }
 
+            // MONITOREO: Detectar cambios de dispositivo (SOLO para logs, NO bloquear)
             if (!$accessToken->isDeviceMatch($currentFingerprint)) {
-                // INTENTO DE COMPARTIR ENLACE DETECTADO
-                Log::warning('❌ CRITICAL: Link sharing detected - Different device attempting access', [
+                Log::info('ℹ️ Device fingerprint changed (allowed - network-friendly policy)', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'original_device' => $accessToken->device_fingerprint,
                     'current_device' => $currentFingerprint,
                     'original_ip' => $accessToken->ip_address,
                     'current_ip' => $request->ip(),
-                    'original_user_agent' => substr($accessToken->user_agent, 0, 100),
-                    'current_user_agent' => substr($request->userAgent(), 0, 100),
-                    'first_access_at' => $accessToken->first_access_at,
-                    'access_count' => $accessToken->access_count,
-                    'security_event' => 'LINK_SHARING_DETECTED',
+                    'note' => 'Could be legitimate: different browser, network change, or shared network',
+                    'action' => 'ALLOWED - not blocking',
                     'access_token_id' => $accessToken->id
                 ]);
 
-                // Bloquear el enlace para prevenir futuros intentos
-                $accessToken->blockAccess();
-
-                return ['valid' => false, 'error_type' => 'link_sharing'];
+                // Actualizar el fingerprint al actual (usuario puede cambiar de dispositivo)
+                $accessToken->update([
+                    'device_fingerprint' => $currentFingerprint,
+                    'ip_address' => $request->ip(),
+                    'user_agent' => $request->userAgent()
+                ]);
             }
 
             // ACCESO VÁLIDO: Actualizar estadísticas
             $accessToken->updateAccess();
 
-            Log::info('✅ Valid device access to survey link', [
+            Log::info('✅ Valid access to survey link', [
                 'survey_id' => $surveyId,
                 'email' => $decodedEmail,
                 'device_fingerprint' => $currentFingerprint,
                 'ip' => $request->ip(),
                 'access_count' => $accessToken->access_count + 1,
+                'note' => 'Network-friendly: Multiple users from same IP allowed',
                 'access_token_id' => $accessToken->id
             ]);
 
