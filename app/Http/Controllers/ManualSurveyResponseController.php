@@ -439,6 +439,30 @@ class ManualSurveyResponseController extends Controller
                 ], 404);
             }
 
+            // NUEVA VALIDACIÓN: Verificar que existe registro de notificación para este usuario
+            // (aplica solo cuando hay email, ya sea con token o con hash)
+            if ($email) {
+                $notificationExists = NotificationSurvaysModel::where('id_survey', $surveyId)
+                    ->where('destinatario', $email)
+                    ->whereIn('state', ['1', 'pending_response', 'sent', 'enviado', 'enviada', 'completed'])
+                    ->exists();
+
+                if (!$notificationExists) {
+                    \Log::warning('❌ ACCESO DENEGADO - No existe registro de notificación para este usuario', [
+                        'survey_id' => $surveyId,
+                        'email' => $email,
+                        'ip' => $request->ip(),
+                        'note' => 'El registro de notificación fue eliminado o nunca existió para este usuario'
+                    ]);
+
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Esta encuesta no está disponible para tu cuenta. El registro no existe o ha sido eliminado.',
+                        'error_type' => 'not_found_for_user'
+                    ], 404);
+                }
+            }
+
             // Si hay token, validarlo
             $tokenData = null;
             if ($token) {
