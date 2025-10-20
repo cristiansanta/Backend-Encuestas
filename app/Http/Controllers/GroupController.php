@@ -12,32 +12,23 @@ use Illuminate\Support\Facades\DB;
 class GroupController extends Controller
 {
     /**
-     * Obtener todos los grupos - Método híbrido
+     * Obtener todos los grupos
+     * Ahora solo cuenta de la tabla group_users (fuente de verdad única)
      */
     public function index()
     {
         try {
             $groups = GroupModel::with('users')->get()->map(function ($group) {
-                // Contar usuarios de ambos métodos de almacenamiento
+                // Contar SOLO de la tabla (fuente de verdad única)
                 $usersFromTable = $group->users->count();
-                $usersFromArray = is_array($group->users_data) ? count($group->users_data) : 0;
-                
-                // Sumar ambos conteos para obtener el total real
-                $totalUsers = $usersFromTable + $usersFromArray;
-                
-                // El conteo final es la suma de ambos métodos de almacenamiento
-                $finalCount = $totalUsers;
-                
+
                 return [
                     'id' => $group->id,
                     'name' => $group->name,
                     'description' => $group->description,
-                    'count' => $finalCount,
-                    'user_count' => $group->user_count, // Campo directo del modelo
-                    'users_count' => $finalCount, // Campo que espera el frontend
-                    'users_from_table' => $usersFromTable,
-                    'users_from_array' => $usersFromArray,
-                    'storage_method' => $usersFromArray > 0 ? 'array' : 'table',
+                    'count' => $usersFromTable,
+                    'user_count' => $usersFromTable,
+                    'users_count' => $usersFromTable, // Campo que espera el frontend
                     'created_at' => $group->created_at,
                     'updated_at' => $group->updated_at
                 ];
@@ -314,7 +305,8 @@ class GroupController extends Controller
     }
 
     /**
-     * Obtener usuarios de un grupo específico - Método híbrido
+     * Obtener usuarios de un grupo específico
+     * Ahora siempre devuelve de la tabla group_users (fuente de verdad única)
      */
     public function getGroupUsers($id)
     {
@@ -327,59 +319,25 @@ class GroupController extends Controller
                 ], 404);
             }
 
-            $users = [];
-            $source = 'individual'; // Por defecto buscar en registros individuales
-
-            // Primero verificar si hay usuarios en el array JSON
-            if (!empty($group->users_data) && is_array($group->users_data)) {
-                $users = collect($group->users_data)->map(function ($user) {
-                    return [
-                        'id' => $user['id'] ?? uniqid('user_', true),
-                        'nombre' => $user['nombre'],
-                        'correo' => $user['correo'],
-                        'categoria' => $user['categoria'],
-                        'tipo_documento' => $user['tipo_documento'] ?? null,
-                        'numero_documento' => $user['numero_documento'] ?? null,
-                        'regional' => $user['regional'] ?? null,
-                        'centro_formacion' => $user['centro_formacion'] ?? null,
-                        'programa_formacion' => $user['programa_formacion'] ?? null,
-                        'ficha_grupo' => $user['ficha_grupo'] ?? null,
-                        'tipo_caracterizacion' => $user['tipo_caracterizacion'] ?? null,
-                        'fechaRegistro' => isset($user['created_at']) ? 
-                            \Carbon\Carbon::parse($user['created_at'])->format('Y-m-d') : 
-                            now()->format('Y-m-d'),
-                        'created_at' => $user['created_at'] ?? now()->toISOString(),
-                        'updated_at' => $user['updated_at'] ?? $user['created_at'] ?? now()->toISOString(),
-                        'storage_type' => 'array'
-                    ];
-                })->toArray();
-                $source = 'array';
-            }
-
-            // Si no hay usuarios en el array, buscar en registros individuales
-            if (empty($users)) {
-                $individualUsers = GroupUserModel::where('group_id', $id)->get();
-                $users = $individualUsers->map(function ($user) {
-                    return [
-                        'id' => $user->id,
-                        'nombre' => $user->nombre,
-                        'correo' => $user->correo,
-                        'categoria' => $user->categoria,
-                        'tipo_documento' => $user->tipo_documento,
-                        'numero_documento' => $user->numero_documento,
-                        'regional' => $user->regional,
-                        'centro_formacion' => $user->centro_formacion,
-                        'programa_formacion' => $user->programa_formacion,
-                        'ficha_grupo' => $user->ficha_grupo,
-                        'tipo_caracterizacion' => $user->tipo_caracterizacion,
-                        'fechaRegistro' => $user->created_at->format('Y-m-d'),
-                        'created_at' => $user->created_at,
-                        'updated_at' => $user->updated_at,
-                        'storage_type' => 'individual'
-                    ];
-                })->toArray();
-                $source = 'individual';
-            }
+            // Obtener SIEMPRE de la tabla group_users (fuente de verdad)
+            $users = GroupUserModel::where('group_id', $id)->get()->map(function ($user) {
+                return [
+                    'id' => $user->id,
+                    'nombre' => $user->nombre,
+                    'correo' => $user->correo,
+                    'categoria' => $user->categoria,
+                    'tipo_documento' => $user->tipo_documento,
+                    'numero_documento' => $user->numero_documento,
+                    'regional' => $user->regional,
+                    'centro_formacion' => $user->centro_formacion,
+                    'programa_formacion' => $user->programa_formacion,
+                    'ficha_grupo' => $user->ficha_grupo,
+                    'tipo_caracterizacion' => $user->tipo_caracterizacion,
+                    'fechaRegistro' => $user->created_at->format('Y-m-d'),
+                    'created_at' => $user->created_at,
+                    'updated_at' => $user->updated_at
+                ];
+            })->toArray();
 
             return response()->json($users, 200);
 
