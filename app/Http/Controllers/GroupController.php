@@ -12,32 +12,23 @@ use Illuminate\Support\Facades\DB;
 class GroupController extends Controller
 {
     /**
-     * Obtener todos los grupos - Método híbrido
+     * Obtener todos los grupos
+     * Ahora solo cuenta de la tabla group_users (fuente de verdad única)
      */
     public function index()
     {
         try {
             $groups = GroupModel::with('users')->get()->map(function ($group) {
-                // Contar usuarios de ambos métodos de almacenamiento
+                // Contar SOLO de la tabla (fuente de verdad única)
                 $usersFromTable = $group->users->count();
-                $usersFromArray = is_array($group->users_data) ? count($group->users_data) : 0;
-                
-                // Sumar ambos conteos para obtener el total real
-                $totalUsers = $usersFromTable + $usersFromArray;
-                
-                // El conteo final es la suma de ambos métodos de almacenamiento
-                $finalCount = $totalUsers;
-                
+
                 return [
                     'id' => $group->id,
                     'name' => $group->name,
                     'description' => $group->description,
-                    'count' => $finalCount,
-                    'user_count' => $group->user_count, // Campo directo del modelo
-                    'users_count' => $finalCount, // Campo que espera el frontend
-                    'users_from_table' => $usersFromTable,
-                    'users_from_array' => $usersFromArray,
-                    'storage_method' => $usersFromArray > 0 ? 'array' : 'table',
+                    'count' => $usersFromTable,
+                    'user_count' => $usersFromTable,
+                    'users_count' => $usersFromTable, // Campo que espera el frontend
                     'created_at' => $group->created_at,
                     'updated_at' => $group->updated_at
                 ];
@@ -149,10 +140,11 @@ class GroupController extends Controller
                     
                     foreach ($batches as $batchIndex => $batch) {
                         \Log::info("GroupController store - Procesando lote " . ($batchIndex + 1) . " de " . count($batches));
-                        
+
                         foreach ($batch as $userData) {
-                            $userRecord = [
-                                'id' => uniqid('user_', true),
+                            // Crear registro en la tabla group_users primero
+                            $groupUser = GroupUserModel::create([
+                                'group_id' => $group->id,
                                 'nombre' => $userData['nombre'],
                                 'correo' => $userData['correo'],
                                 'categoria' => $userData['categoria'],
@@ -163,14 +155,30 @@ class GroupController extends Controller
                                 'programa_formacion' => $userData['programa_formacion'] ?? null,
                                 'ficha_grupo' => $userData['ficha_grupo'] ?? null,
                                 'tipo_caracterizacion' => $userData['tipo_caracterizacion'] ?? null,
-                                'created_at' => now()->toISOString(),
+                                'created_by' => Auth::id() ?? 1
+                            ]);
+
+                            // También guardar en el array JSON usando el ID de la tabla
+                            $userRecord = [
+                                'id' => $groupUser->id, // Usar el ID real de la tabla
+                                'nombre' => $userData['nombre'],
+                                'correo' => $userData['correo'],
+                                'categoria' => $userData['categoria'],
+                                'tipo_documento' => $userData['tipo_documento'] ?? null,
+                                'numero_documento' => $userData['numero_documento'] ?? null,
+                                'regional' => $userData['regional'] ?? null,
+                                'centro_formacion' => $userData['centro_formacion'] ?? null,
+                                'programa_formacion' => $userData['programa_formacion'] ?? null,
+                                'ficha_grupo' => $userData['ficha_grupo'] ?? null,
+                                'tipo_caracterizacion' => $userData['tipo_caracterizacion'] ?? null,
+                                'created_at' => $groupUser->created_at->toISOString(),
                                 'created_by' => Auth::id() ?? 1
                             ];
-                            
+
                             $usersData[] = $userRecord;
                             $addedUsers[] = $userRecord;
                         }
-                        
+
                         // Limpiar memoria después de cada lote
                         if (function_exists('gc_collect_cycles')) {
                             gc_collect_cycles();
@@ -297,7 +305,8 @@ class GroupController extends Controller
     }
 
     /**
-     * Obtener usuarios de un grupo específico - Método híbrido
+     * Obtener usuarios de un grupo específico
+     * Ahora siempre devuelve de la tabla group_users (fuente de verdad única)
      */
     public function getGroupUsers($id)
     {
@@ -310,59 +319,25 @@ class GroupController extends Controller
                 ], 404);
             }
 
-            $users = [];
-            $source = 'individual'; // Por defecto buscar en registros individuales
-
-            // Primero verificar si hay usuarios en el array JSON
-            if (!empty($group->users_data) && is_array($group->users_data)) {
-                $users = collect($group->users_data)->map(function ($user) {
-                    return [
-                        'id' => $user['id'] ?? uniqid('user_', true),
-                        'nombre' => $user['nombre'],
-                        'correo' => $user['correo'],
-                        'categoria' => $user['categoria'],
-                        'tipo_documento' => $user['tipo_documento'] ?? null,
-                        'numero_documento' => $user['numero_documento'] ?? null,
-                        'regional' => $user['regional'] ?? null,
-                        'centro_formacion' => $user['centro_formacion'] ?? null,
-                        'programa_formacion' => $user['programa_formacion'] ?? null,
-                        'ficha_grupo' => $user['ficha_grupo'] ?? null,
-                        'tipo_caracterizacion' => $user['tipo_caracterizacion'] ?? null,
-                        'fechaRegistro' => isset($user['created_at']) ? 
-                            \Carbon\Carbon::parse($user['created_at'])->format('Y-m-d') : 
-                            now()->format('Y-m-d'),
-                        'created_at' => $user['created_at'] ?? now()->toISOString(),
-                        'updated_at' => $user['updated_at'] ?? $user['created_at'] ?? now()->toISOString(),
-                        'storage_type' => 'array'
-                    ];
-                })->toArray();
-                $source = 'array';
-            }
-
-            // Si no hay usuarios en el array, buscar en registros individuales
-            if (empty($users)) {
-                $individualUsers = GroupUserModel::where('group_id', $id)->get();
-                $users = $individualUsers->map(function ($user) {
-                    return [
-                        'id' => $user->id,
-                        'nombre' => $user->nombre,
-                        'correo' => $user->correo,
-                        'categoria' => $user->categoria,
-                        'tipo_documento' => $user->tipo_documento,
-                        'numero_documento' => $user->numero_documento,
-                        'regional' => $user->regional,
-                        'centro_formacion' => $user->centro_formacion,
-                        'programa_formacion' => $user->programa_formacion,
-                        'ficha_grupo' => $user->ficha_grupo,
-                        'tipo_caracterizacion' => $user->tipo_caracterizacion,
-                        'fechaRegistro' => $user->created_at->format('Y-m-d'),
-                        'created_at' => $user->created_at,
-                        'updated_at' => $user->updated_at,
-                        'storage_type' => 'individual'
-                    ];
-                })->toArray();
-                $source = 'individual';
-            }
+            // Obtener SIEMPRE de la tabla group_users (fuente de verdad)
+            $users = GroupUserModel::where('group_id', $id)->get()->map(function ($user) {
+                return [
+                    'id' => $user->id,
+                    'nombre' => $user->nombre,
+                    'correo' => $user->correo,
+                    'categoria' => $user->categoria,
+                    'tipo_documento' => $user->tipo_documento,
+                    'numero_documento' => $user->numero_documento,
+                    'regional' => $user->regional,
+                    'centro_formacion' => $user->centro_formacion,
+                    'programa_formacion' => $user->programa_formacion,
+                    'ficha_grupo' => $user->ficha_grupo,
+                    'tipo_caracterizacion' => $user->tipo_caracterizacion,
+                    'fechaRegistro' => $user->created_at->format('Y-m-d'),
+                    'created_at' => $user->created_at,
+                    'updated_at' => $user->updated_at
+                ];
+            })->toArray();
 
             return response()->json($users, 200);
 
@@ -423,23 +398,10 @@ class GroupController extends Controller
                 );
             }
 
-            // Detectar automáticamente el método de almacenamiento
-            $currentUsersData = $group->users_data ?? [];
-            $hasArrayData = !empty($currentUsersData) && is_array($currentUsersData);
-            $hasTableData = $group->users()->count() > 0;
-            
-            // Si el grupo ya tiene datos en users_data, usar array storage
-            // Si no, usar el parámetro proporcionado o array por defecto
-            $useArrayStorage = $hasArrayData ? true : $request->get('use_array_storage', true);
-
-            // Verificar si el usuario ya existe
-            if ($useArrayStorage) {
-                $emailExists = collect($currentUsersData)->contains('correo', $request->correo);
-            } else {
-                $emailExists = GroupUserModel::where('group_id', $group->id)
-                    ->where('correo', $request->correo)
-                    ->exists();
-            }
+            // Verificar si el usuario ya existe en la tabla
+            $emailExists = GroupUserModel::where('group_id', $group->id)
+                ->where('correo', $request->correo)
+                ->exists();
 
             if ($emailExists) {
                 return response()->json([
@@ -447,8 +409,10 @@ class GroupController extends Controller
                 ], 409);
             }
 
-            $userRecord = [
-                'id' => uniqid('user_', true),
+            // SIEMPRE guardar en ambos lugares: tabla y array JSON
+            // 1. Primero crear en la tabla group_users
+            $groupUser = GroupUserModel::create([
+                'group_id' => $group->id,
                 'nombre' => $request->nombre,
                 'correo' => $request->correo,
                 'categoria' => $request->categoria,
@@ -459,69 +423,48 @@ class GroupController extends Controller
                 'programa_formacion' => $request->programa_formacion,
                 'ficha_grupo' => $request->ficha_grupo,
                 'tipo_caracterizacion' => $request->tipo_caracterizacion,
-                'created_at' => now()->toISOString(),
+                'created_by' => Auth::id() ?? 1
+            ]);
+
+            // 2. También agregar al array JSON usando el ID de la tabla
+            $currentUsersData = $group->users_data ?? [];
+            $userRecord = [
+                'id' => $groupUser->id,
+                'nombre' => $groupUser->nombre,
+                'correo' => $groupUser->correo,
+                'categoria' => $groupUser->categoria,
+                'tipo_documento' => $groupUser->tipo_documento,
+                'numero_documento' => $groupUser->numero_documento,
+                'regional' => $groupUser->regional,
+                'centro_formacion' => $groupUser->centro_formacion,
+                'programa_formacion' => $groupUser->programa_formacion,
+                'ficha_grupo' => $groupUser->ficha_grupo,
+                'tipo_caracterizacion' => $groupUser->tipo_caracterizacion,
+                'created_at' => $groupUser->created_at->toISOString(),
                 'created_by' => Auth::id() ?? 1
             ];
 
-            if ($useArrayStorage) {
-                // Agregar al array JSON
-                $currentUsersData[] = $userRecord;
-                $group->users_data = $currentUsersData;
-                $group->user_count = count($currentUsersData);
-                $group->save();
+            $currentUsersData[] = $userRecord;
+            $group->users_data = $currentUsersData;
+            $group->user_count = count($currentUsersData);
+            $group->save();
 
-                // Formatear respuesta para que coincida con lo que espera el frontend
-                $responseUser = [
-                    'id' => $userRecord['id'],
-                    'nombre' => $userRecord['nombre'],
-                    'correo' => $userRecord['correo'],
-                    'categoria' => $userRecord['categoria'],
-                    'tipo_documento' => $userRecord['tipo_documento'],
-                    'numero_documento' => $userRecord['numero_documento'],
-                    'regional' => $userRecord['regional'],
-                    'centro_formacion' => $userRecord['centro_formacion'],
-                    'programa_formacion' => $userRecord['programa_formacion'],
-                    'ficha_grupo' => $userRecord['ficha_grupo'],
-                    'tipo_caracterizacion' => $userRecord['tipo_caracterizacion'],
-                    'created_at' => $userRecord['created_at'],
-                    'updated_at' => $userRecord['created_at']
-                ];
-            } else {
-                // Crear registro individual (método original)
-                $groupUser = GroupUserModel::create([
-                    'group_id' => $group->id,
-                    'nombre' => $request->nombre,
-                    'correo' => $request->correo,
-                    'categoria' => $request->categoria,
-                    'tipo_documento' => $request->tipo_documento,
-                    'numero_documento' => $request->numero_documento,
-                    'regional' => $request->regional,
-                    'centro_formacion' => $request->centro_formacion,
-                    'programa_formacion' => $request->programa_formacion,
-                    'ficha_grupo' => $request->ficha_grupo,
-                    'tipo_caracterizacion' => $request->tipo_caracterizacion,
-                    'created_by' => Auth::id() ?? 1
-                ]);
-
-                // Actualizar contador del grupo
-                $group->updateUserCount();
-
-                $responseUser = [
-                    'id' => $groupUser->id,
-                    'nombre' => $groupUser->nombre,
-                    'correo' => $groupUser->correo,
-                    'categoria' => $groupUser->categoria,
-                    'tipo_documento' => $groupUser->tipo_documento,
-                    'numero_documento' => $groupUser->numero_documento,
-                    'regional' => $groupUser->regional,
-                    'centro_formacion' => $groupUser->centro_formacion,
-                    'programa_formacion' => $groupUser->programa_formacion,
-                    'ficha_grupo' => $groupUser->ficha_grupo,
-                    'tipo_caracterizacion' => $groupUser->tipo_caracterizacion,
-                    'created_at' => $groupUser->created_at,
-                    'updated_at' => $groupUser->updated_at
-                ];
-            }
+            // Formatear respuesta
+            $responseUser = [
+                'id' => $groupUser->id,
+                'nombre' => $groupUser->nombre,
+                'correo' => $groupUser->correo,
+                'categoria' => $groupUser->categoria,
+                'tipo_documento' => $groupUser->tipo_documento,
+                'numero_documento' => $groupUser->numero_documento,
+                'regional' => $groupUser->regional,
+                'centro_formacion' => $groupUser->centro_formacion,
+                'programa_formacion' => $groupUser->programa_formacion,
+                'ficha_grupo' => $groupUser->ficha_grupo,
+                'tipo_caracterizacion' => $groupUser->tipo_caracterizacion,
+                'created_at' => $groupUser->created_at,
+                'updated_at' => $groupUser->updated_at
+            ];
 
             return response()->json($responseUser, 201);
 
@@ -576,32 +519,25 @@ class GroupController extends Controller
                     ]
                 );
 
-                $useArrayStorage = $request->get('use_array_storage', true); // Por defecto usar array
                 $addedUsers = [];
                 $skippedUsers = [];
                 $currentUsersData = $group->users_data ?? [];
 
                 foreach ($request->users as $userData) {
-                    // Verificar si el usuario ya existe
-                    $emailExists = false;
-                    
-                    if ($useArrayStorage) {
-                        // Verificar en el array JSON
-                        $emailExists = collect($currentUsersData)->contains('correo', $userData['correo']);
-                    } else {
-                        // Verificar en la tabla individual
-                        $emailExists = GroupUserModel::where('group_id', $group->id)
-                            ->where('correo', $userData['correo'])
-                            ->exists();
-                    }
+                    // Verificar si el usuario ya existe en la tabla
+                    $emailExists = GroupUserModel::where('group_id', $group->id)
+                        ->where('correo', $userData['correo'])
+                        ->exists();
 
                     if ($emailExists) {
                         $skippedUsers[] = $userData['correo'];
                         continue;
                     }
 
-                    $userRecord = [
-                        'id' => uniqid('user_', true), // ID único para el array
+                    // SIEMPRE guardar en ambos lugares: tabla y array JSON
+                    // 1. Crear en la tabla group_users
+                    $groupUser = GroupUserModel::create([
+                        'group_id' => $group->id,
                         'nombre' => $userData['nombre'],
                         'correo' => $userData['correo'],
                         'categoria' => $userData['categoria'],
@@ -612,56 +548,46 @@ class GroupController extends Controller
                         'programa_formacion' => $userData['programa_formacion'] ?? null,
                         'ficha_grupo' => $userData['ficha_grupo'] ?? null,
                         'tipo_caracterizacion' => $userData['tipo_caracterizacion'] ?? null,
-                        'created_at' => now()->toISOString(),
+                        'created_by' => Auth::id() ?? 1
+                    ]);
+
+                    // 2. También agregar al array JSON usando el ID de la tabla
+                    $userRecord = [
+                        'id' => $groupUser->id,
+                        'nombre' => $groupUser->nombre,
+                        'correo' => $groupUser->correo,
+                        'categoria' => $groupUser->categoria,
+                        'tipo_documento' => $groupUser->tipo_documento,
+                        'numero_documento' => $groupUser->numero_documento,
+                        'regional' => $groupUser->regional,
+                        'centro_formacion' => $groupUser->centro_formacion,
+                        'programa_formacion' => $groupUser->programa_formacion,
+                        'ficha_grupo' => $groupUser->ficha_grupo,
+                        'tipo_caracterizacion' => $groupUser->tipo_caracterizacion,
+                        'created_at' => $groupUser->created_at->toISOString(),
                         'created_by' => Auth::id() ?? 1
                     ];
 
-                    if ($useArrayStorage) {
-                        // Agregar al array JSON
-                        $currentUsersData[] = $userRecord;
-                    } else {
-                        // Crear registro individual (método original)
-                        $groupUser = GroupUserModel::create([
-                            'group_id' => $group->id,
-                            'nombre' => $userData['nombre'],
-                            'correo' => $userData['correo'],
-                            'categoria' => $userData['categoria'],
-                            'tipo_documento' => $userData['tipo_documento'],
-                            'numero_documento' => $userData['numero_documento'],
-                            'regional' => $userData['regional'] ?? null,
-                            'centro_formacion' => $userData['centro_formacion'] ?? null,
-                            'programa_formacion' => $userData['programa_formacion'] ?? null,
-                            'ficha_grupo' => $userData['ficha_grupo'] ?? null,
-                            'tipo_caracterizacion' => $userData['tipo_caracterizacion'] ?? null,
-                            'created_by' => Auth::id() ?? 1
-                        ]);
-                        $userRecord['id'] = $groupUser->id;
-                    }
-
+                    $currentUsersData[] = $userRecord;
                     $addedUsers[] = $userRecord;
                 }
 
-                if ($useArrayStorage) {
-                    // Actualizar el grupo con el array de usuarios
-                    $group->users_data = $currentUsersData;
-                    $group->user_count = count($currentUsersData);
-                    $group->save();
-                } else {
-                    // Actualizar contador del grupo (método original)
-                    $group->updateUserCount();
-                }
+                // Actualizar el grupo con el array de usuarios y contador
+                $group->users_data = $currentUsersData;
+                $group->user_count = count($currentUsersData);
+                $group->save();
 
                 DB::commit();
 
                 return response()->json([
                     'message' => 'Usuarios procesados exitosamente',
-                    'storage_method' => $useArrayStorage ? 'array' : 'individual',
+                    'storage_method' => 'dual', // Guardado en tabla y array
                     'group' => [
                         'id' => $group->id,
                         'name' => $group->name,
                         'description' => $group->description,
                         'user_count' => $group->user_count,
-                        'users_count_from_array' => $useArrayStorage ? count($group->users_data ?? []) : null
+                        'users_count_from_array' => count($group->users_data ?? [])
                     ],
                     'added_count' => count($addedUsers),
                     'skipped_count' => count($skippedUsers),
@@ -715,119 +641,82 @@ class GroupController extends Controller
                 ], 404);
             }
 
-            $userFound = false;
-            $updatedUser = null;
+            // Buscar usuario en la tabla
+            $groupUser = GroupUserModel::where('group_id', $groupId)
+                ->where('id', $userId)
+                ->first();
 
-            // Verificar si el usuario está en users_data (array JSON)
+            if (!$groupUser) {
+                return response()->json([
+                    'message' => 'Usuario no encontrado en el grupo'
+                ], 404);
+            }
+
+            // Verificar si el nuevo correo ya existe en el grupo (excepto el usuario actual)
+            $existingUser = GroupUserModel::where('group_id', $groupId)
+                ->where('correo', $request->correo)
+                ->where('id', '!=', $userId)
+                ->first();
+
+            if ($existingUser) {
+                return response()->json([
+                    'message' => 'El correo ya existe en este grupo'
+                ], 409);
+            }
+
+            // SIEMPRE actualizar en ambos lugares
+            // 1. Actualizar en la tabla
+            $groupUser->update([
+                'nombre' => $request->nombre,
+                'correo' => $request->correo,
+                'categoria' => $request->categoria ?? $groupUser->categoria,
+                'tipo_documento' => $request->tipo_documento ?? $groupUser->tipo_documento,
+                'numero_documento' => $request->numero_documento ?? $groupUser->numero_documento,
+                'regional' => $request->regional ?? $groupUser->regional,
+                'centro_formacion' => $request->centro_formacion ?? $groupUser->centro_formacion,
+                'programa_formacion' => $request->programa_formacion ?? $groupUser->programa_formacion,
+                'ficha_grupo' => $request->ficha_grupo ?? $groupUser->ficha_grupo,
+                'tipo_caracterizacion' => $request->tipo_caracterizacion ?? $groupUser->tipo_caracterizacion
+            ]);
+
+            // 2. Actualizar en el array JSON
             $usersData = $group->users_data ?? [];
             if (is_array($usersData) && count($usersData) > 0) {
                 foreach ($usersData as $index => $user) {
-                    if (isset($user['id']) && $user['id'] === $userId) {
-                        // Verificar si el nuevo correo ya existe (excepto el usuario actual)
-                        $emailExists = false;
-                        foreach ($usersData as $otherUser) {
-                            if ($otherUser['id'] !== $userId && $otherUser['correo'] === $request->correo) {
-                                $emailExists = true;
-                                break;
-                            }
-                        }
-
-                        if ($emailExists) {
-                            return response()->json([
-                                'message' => 'El correo ya existe en este grupo'
-                            ], 409);
-                        }
-
-                        // Actualizar usuario en el array
-                        $usersData[$index]['nombre'] = $request->nombre;
-                        $usersData[$index]['correo'] = $request->correo;
-                        $usersData[$index]['categoria'] = $request->categoria ?? $user['categoria'];
-                        $usersData[$index]['tipo_documento'] = $request->tipo_documento ?? $user['tipo_documento'];
-                        $usersData[$index]['numero_documento'] = $request->numero_documento ?? $user['numero_documento'];
-                        $usersData[$index]['regional'] = $request->regional ?? $user['regional'];
-                        $usersData[$index]['centro_formacion'] = $request->centro_formacion ?? $user['centro_formacion'];
-                        $usersData[$index]['programa_formacion'] = $request->programa_formacion ?? $user['programa_formacion'];
-                        $usersData[$index]['ficha_grupo'] = $request->ficha_grupo ?? $user['ficha_grupo'];
-                        $usersData[$index]['tipo_caracterizacion'] = $request->tipo_caracterizacion ?? $user['tipo_caracterizacion'];
-                        $usersData[$index]['updated_at'] = now()->toISOString();
-
-                        $group->users_data = $usersData;
-                        $group->save();
-
-                        $updatedUser = [
-                            'id' => $usersData[$index]['id'],
-                            'nombre' => $usersData[$index]['nombre'],
-                            'correo' => $usersData[$index]['correo'],
-                            'categoria' => $usersData[$index]['categoria'],
-                            'tipo_documento' => $usersData[$index]['tipo_documento'],
-                            'numero_documento' => $usersData[$index]['numero_documento'],
-                            'regional' => $usersData[$index]['regional'],
-                            'centro_formacion' => $usersData[$index]['centro_formacion'],
-                            'programa_formacion' => $usersData[$index]['programa_formacion'],
-                            'ficha_grupo' => $usersData[$index]['ficha_grupo'],
-                            'tipo_caracterizacion' => $usersData[$index]['tipo_caracterizacion'],
-                            'created_at' => $usersData[$index]['created_at'],
-                            'updated_at' => $usersData[$index]['updated_at']
-                        ];
-                        $userFound = true;
+                    if (isset($user['id']) && $user['id'] == $userId) {
+                        $usersData[$index]['nombre'] = $groupUser->nombre;
+                        $usersData[$index]['correo'] = $groupUser->correo;
+                        $usersData[$index]['categoria'] = $groupUser->categoria;
+                        $usersData[$index]['tipo_documento'] = $groupUser->tipo_documento;
+                        $usersData[$index]['numero_documento'] = $groupUser->numero_documento;
+                        $usersData[$index]['regional'] = $groupUser->regional;
+                        $usersData[$index]['centro_formacion'] = $groupUser->centro_formacion;
+                        $usersData[$index]['programa_formacion'] = $groupUser->programa_formacion;
+                        $usersData[$index]['ficha_grupo'] = $groupUser->ficha_grupo;
+                        $usersData[$index]['tipo_caracterizacion'] = $groupUser->tipo_caracterizacion;
+                        $usersData[$index]['updated_at'] = $groupUser->updated_at->toISOString();
                         break;
                     }
                 }
+                $group->users_data = $usersData;
+                $group->save();
             }
 
-            // Si no se encontró en users_data, buscar en la tabla individual
-            if (!$userFound) {
-                $groupUser = GroupUserModel::where('group_id', $groupId)
-                    ->where('id', $userId)
-                    ->first();
-
-                if (!$groupUser) {
-                    return response()->json([
-                        'message' => 'Usuario no encontrado en el grupo'
-                    ], 404);
-                }
-
-                // Verificar si el nuevo correo ya existe en el grupo (excepto el usuario actual)
-                $existingUser = GroupUserModel::where('group_id', $groupId)
-                    ->where('correo', $request->correo)
-                    ->where('id', '!=', $userId)
-                    ->first();
-
-                if ($existingUser) {
-                    return response()->json([
-                        'message' => 'El correo ya existe en este grupo'
-                    ], 409);
-                }
-
-                $groupUser->update([
-                    'nombre' => $request->nombre,
-                    'correo' => $request->correo,
-                    'categoria' => $request->categoria ?? $groupUser->categoria,
-                    'tipo_documento' => $request->tipo_documento ?? $groupUser->tipo_documento,
-                    'numero_documento' => $request->numero_documento ?? $groupUser->numero_documento,
-                    'regional' => $request->regional ?? $groupUser->regional,
-                    'centro_formacion' => $request->centro_formacion ?? $groupUser->centro_formacion,
-                    'programa_formacion' => $request->programa_formacion ?? $groupUser->programa_formacion,
-                    'ficha_grupo' => $request->ficha_grupo ?? $groupUser->ficha_grupo,
-                    'tipo_caracterizacion' => $request->tipo_caracterizacion ?? $groupUser->tipo_caracterizacion
-                ]);
-
-                $updatedUser = [
-                    'id' => $groupUser->id,
-                    'nombre' => $groupUser->nombre,
-                    'correo' => $groupUser->correo,
-                    'categoria' => $groupUser->categoria,
-                    'tipo_documento' => $groupUser->tipo_documento,
-                    'numero_documento' => $groupUser->numero_documento,
-                    'regional' => $groupUser->regional,
-                    'centro_formacion' => $groupUser->centro_formacion,
-                    'programa_formacion' => $groupUser->programa_formacion,
-                    'ficha_grupo' => $groupUser->ficha_grupo,
-                    'tipo_caracterizacion' => $groupUser->tipo_caracterizacion,
-                    'created_at' => $groupUser->created_at,
-                    'updated_at' => $groupUser->updated_at
-                ];
-            }
+            $updatedUser = [
+                'id' => $groupUser->id,
+                'nombre' => $groupUser->nombre,
+                'correo' => $groupUser->correo,
+                'categoria' => $groupUser->categoria,
+                'tipo_documento' => $groupUser->tipo_documento,
+                'numero_documento' => $groupUser->numero_documento,
+                'regional' => $groupUser->regional,
+                'centro_formacion' => $groupUser->centro_formacion,
+                'programa_formacion' => $groupUser->programa_formacion,
+                'ficha_grupo' => $groupUser->ficha_grupo,
+                'tipo_caracterizacion' => $groupUser->tipo_caracterizacion,
+                'created_at' => $groupUser->created_at,
+                'updated_at' => $groupUser->updated_at
+            ];
 
             return response()->json($updatedUser, 200);
 
@@ -853,54 +742,38 @@ class GroupController extends Controller
                 ], 404);
             }
 
-            $userFound = false;
+            // Buscar usuario en la tabla
+            $groupUser = GroupUserModel::where('group_id', $groupId)
+                ->where('id', $userId)
+                ->first();
 
-            // Verificar si el usuario está en users_data (array JSON)
+            if (!$groupUser) {
+                return response()->json([
+                    'message' => 'Usuario no encontrado en el grupo'
+                ], 404);
+            }
+
+            // SIEMPRE eliminar de ambos lugares
+            // 1. Eliminar de la tabla
+            $groupUser->delete();
+
+            // 2. Eliminar del array JSON
             $usersData = $group->users_data ?? [];
             if (is_array($usersData) && count($usersData) > 0) {
                 $filteredUsers = [];
                 foreach ($usersData as $user) {
-                    if (isset($user['id']) && $user['id'] === $userId) {
-                        $userFound = true;
-                        // No agregar este usuario al array filtrado (efectivamente lo elimina)
-                    } else {
+                    if (isset($user['id']) && $user['id'] != $userId) {
                         $filteredUsers[] = $user;
                     }
                 }
-
-                if ($userFound) {
-                    // Actualizar el array de usuarios y el contador
-                    $group->users_data = $filteredUsers;
-                    $group->user_count = count($filteredUsers);
-                    $group->save();
-
-                    return response()->json([
-                        'message' => 'Usuario eliminado exitosamente del grupo'
-                    ], 200);
-                }
+                $group->users_data = $filteredUsers;
+                $group->user_count = count($filteredUsers);
+                $group->save();
             }
 
-            // Si no se encontró en users_data, buscar en la tabla individual
-            if (!$userFound) {
-                $groupUser = GroupUserModel::where('group_id', $groupId)
-                    ->where('id', $userId)
-                    ->first();
-
-                if (!$groupUser) {
-                    return response()->json([
-                        'message' => 'Usuario no encontrado en el grupo'
-                    ], 404);
-                }
-
-                $groupUser->delete();
-
-                // Actualizar contador del grupo
-                $group->updateUserCount();
-
-                return response()->json([
-                    'message' => 'Usuario eliminado exitosamente del grupo'
-                ], 200);
-            }
+            return response()->json([
+                'message' => 'Usuario eliminado exitosamente del grupo'
+            ], 200);
 
         } catch (\Exception $e) {
             return response()->json([
