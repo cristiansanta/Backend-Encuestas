@@ -70,7 +70,7 @@ class GroupController extends Controller
             }
             
             $validator = Validator::make($requestData, [
-                'name' => 'required|string|max:255',
+                'name' => 'required|string|max:30',
                 'description' => 'nullable|string|max:500',
                 'users' => 'nullable|array',
                 'users.*.nombre' => 'required_with:users|string|max:255',
@@ -134,10 +134,38 @@ class GroupController extends Controller
                     // Log para monitorear el progreso
                     \Log::info("GroupController store - Procesando {$userCount} usuarios");
                     
+                    // VALIDAR DUPLICADOS ANTES DE CREAR
+                    $duplicateUsers = [];
+                    foreach ($requestData['users'] as $userData) {
+                        if (isset($userData['tipo_documento']) && isset($userData['numero_documento'])) {
+                            $existing = GroupUserModel::where('tipo_documento', $userData['tipo_documento'])
+                                ->where('numero_documento', $userData['numero_documento'])
+                                ->with('group')
+                                ->first();
+
+                            if ($existing) {
+                                $duplicateUsers[] = [
+                                    'nombre' => $userData['nombre'],
+                                    'correo' => $userData['correo'],
+                                    'documento' => $userData['tipo_documento'] . ' ' . $userData['numero_documento'],
+                                    'grupo_existente' => $existing->group ? $existing->group->name : 'Desconocido'
+                                ];
+                            }
+                        }
+                    }
+
+                    // Si hay duplicados, rechazar la creación del grupo
+                    if (!empty($duplicateUsers)) {
+                        return response()->json([
+                            'message' => 'Algunos usuarios ya existen en otros grupos',
+                            'duplicates' => $duplicateUsers
+                        ], 409);
+                    }
+
                     // Procesar usuarios en lotes para optimizar memoria
                     $batchSize = 500;
                     $batches = array_chunk($requestData['users'], $batchSize);
-                    
+
                     foreach ($batches as $batchIndex => $batch) {
                         \Log::info("GroupController store - Procesando lote " . ($batchIndex + 1) . " de " . count($batches));
 
@@ -269,7 +297,7 @@ class GroupController extends Controller
             }
 
             $validator = Validator::make($request->all(), [
-                'name' => 'required|string|max:255|unique:groups,name,' . $id,
+                'name' => 'required|string|max:30|unique:groups,name,' . $id,
                 'description' => 'nullable|string|max:500'
             ]);
 
@@ -483,7 +511,7 @@ class GroupController extends Controller
     {
         try {
             $validator = Validator::make($request->all(), [
-                'groupName' => 'required|string|max:255',
+                'groupName' => 'required|string|max:30',
                 'users' => 'required|array|min:1',
                 'users.*.nombre' => 'required|string|max:255',
                 'users.*.correo' => 'required|email|max:255',

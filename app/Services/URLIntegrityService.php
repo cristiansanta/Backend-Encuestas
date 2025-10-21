@@ -1419,49 +1419,7 @@ class URLIntegrityService
             $currentFingerprint = self::generateDeviceFingerprint();
             $request = request();
 
-            // VALIDACIÓN CRÍTICA 1: Verificar que el hash sea VÁLIDO para este email específico
-            // Esto previene que Usuario B use el hash de Usuario A
-            $hashValidation = self::validateHashWithDetails($surveyId, $decodedEmail, $providedHash);
-
-            if (!$hashValidation['valid']) {
-                // El hash NO es válido para este email
-                // Verificar si el hash pertenece a OTRO usuario (link sharing)
-                $existingHashForOtherUser = SurveyAccessToken::where('survey_id', $surveyId)
-                    ->where('hash', $providedHash)
-                    ->first();
-
-                if ($existingHashForOtherUser) {
-                    // INTENTO DE LINK SHARING DETECTADO
-                    Log::warning('🚨 LINK SHARING BLOCKED: Using hash from different user', [
-                        'survey_id' => $surveyId,
-                        'attempting_email' => $decodedEmail,
-                        'original_email' => $existingHashForOtherUser->email,
-                        'hash' => substr($providedHash, 0, 16) . '...',
-                        'original_user_ip' => $existingHashForOtherUser->ip_address,
-                        'current_ip' => $request->ip(),
-                        'hash_error_type' => $hashValidation['error_type'],
-                        'security_event' => 'LINK_SHARING_ATTEMPT_INVALID_HASH'
-                    ]);
-
-                    // Bloquear el hash original como medida de seguridad
-                    $existingHashForOtherUser->blockAccess();
-
-                    return ['valid' => false, 'error_type' => 'link_sharing'];
-                }
-
-                // Hash inválido pero no pertenece a nadie más (hash corrupto)
-                Log::warning('❌ Invalid hash - not valid for this email', [
-                    'survey_id' => $surveyId,
-                    'email' => $decodedEmail,
-                    'hash' => substr($providedHash, 0, 16) . '...',
-                    'error_type' => $hashValidation['error_type'],
-                    'ip' => $request->ip()
-                ]);
-
-                return ['valid' => false, 'error_type' => $hashValidation['error_type']];
-            }
-
-            // VALIDACIÓN PRINCIPAL: survey_id + email + hash (único por usuario)
+            // PRIMERO: Verificar si este usuario ya tiene un token registrado
             $accessToken = SurveyAccessToken::where('survey_id', $surveyId)
                 ->where('email', $decodedEmail)
                 ->where('hash', $providedHash)
@@ -1528,28 +1486,27 @@ class URLIntegrityService
                 return ['valid' => false, 'error_type' => 'link_blocked'];
             }
 
-            // VALIDACIÓN CRÍTICA: Verificar device fingerprint para detectar link sharing
+            // PERMITIR: El mismo usuario puede acceder desde diferentes dispositivos/navegadores
+            // Solo actualizamos el fingerprint al más reciente
             if (!$accessToken->isDeviceMatch($currentFingerprint)) {
-                // Device fingerprint diferente = POSIBLE LINK SHARING
-                Log::warning('🚨 LINK SHARING DETECTED: Different device fingerprint', [
+                Log::info('ℹ️ Device fingerprint changed - updating to new device', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'original_device' => $accessToken->device_fingerprint,
                     'current_device' => $currentFingerprint,
-                    'original_ip' => $accessToken->ip_address,
-                    'current_ip' => $request->ip(),
                     'original_user_agent' => $accessToken->user_agent,
                     'current_user_agent' => $request->userAgent(),
-                    'access_count_before_block' => $accessToken->access_count,
-                    'first_access_at' => $accessToken->first_access_at,
-                    'security_event' => 'LINK_SHARING_DIFFERENT_DEVICE',
+                    'note' => 'Same user from different device - allowed',
                     'access_token_id' => $accessToken->id
                 ]);
 
-                // BLOQUEAR el token inmediatamente
-                $accessToken->blockAccess();
-
-                return ['valid' => false, 'error_type' => 'link_sharing'];
+                // Actualizar el fingerprint al dispositivo actual
+                // El mismo usuario puede acceder desde Chrome, Firefox, celular, etc.
+                $accessToken->update([
+                    'device_fingerprint' => $currentFingerprint,
+                    'ip_address' => $request->ip(),
+                    'user_agent' => $request->userAgent()
+                ]);
             }
 
             // ACCESO VÁLIDO: Actualizar estadísticas
