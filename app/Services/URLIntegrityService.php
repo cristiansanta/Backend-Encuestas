@@ -61,22 +61,29 @@ class URLIntegrityService
     {
         $request = request();
 
-        // ESTRATEGIA MEJORADA: Solo User-Agent sin IP
-        // Permite múltiples usuarios en la misma red corporativa/escuela
-        // La IP NO es un indicador confiable de "link sharing"
+        // ESTRATEGIA MEJORADA: Múltiples headers para diferenciar navegadores
+        // Brave, Chrome, Firefox tienen combinaciones únicas de headers
+        // NO incluye IP - permite múltiples usuarios en la misma red
         $fingerprintData = [
             'user_agent' => $request->userAgent(),
-            // NO incluir IP - múltiples usuarios legítimos pueden compartir IP
+            'accept' => $request->header('Accept', ''),
+            'accept_language' => $request->header('Accept-Language', ''),
+            'accept_encoding' => $request->header('Accept-Encoding', ''),
+            // Chrome/Brave envían estos headers, Firefox no
+            'sec_ch_ua' => $request->header('Sec-Ch-Ua', ''),
+            'sec_ch_ua_platform' => $request->header('Sec-Ch-Ua-Platform', ''),
+            'sec_ch_ua_mobile' => $request->header('Sec-Ch-Ua-Mobile', ''),
         ];
 
-        // Generar hash único del dispositivo basado SOLO en User-Agent
+        // Generar hash único del dispositivo basado en múltiples headers
         $fingerprintString = implode('|', $fingerprintData);
         $fingerprint = substr(hash('sha256', $fingerprintString), 0, 8);
 
-        Log::info('🔍 Device fingerprint generated (network-friendly)', [
+        Log::info('🔍 Device fingerprint generated (enhanced)', [
             'fingerprint' => $fingerprint,
             'user_agent_length' => strlen($fingerprintData['user_agent']),
-            'note' => 'IP not included - allows multiple users on same network'
+            'has_sec_ch_ua' => !empty($fingerprintData['sec_ch_ua']),
+            'note' => 'Multi-header fingerprint - differentiates Brave/Chrome/Firefox'
         ]);
 
         return $fingerprint;
@@ -1419,6 +1426,33 @@ class URLIntegrityService
             $currentFingerprint = self::generateDeviceFingerprint();
             $request = request();
 
+            // ===============================================================
+            // BLOQUEO 100% EFECTIVO: Validar que el email está autorizado
+            // ===============================================================
+            // Verificar que este email está en la lista de destinatarios
+            $isAuthorizedRecipient = \App\Models\NotificationSurvaysModel::where('id_survey', $surveyId)
+                ->where('destinatario', $decodedEmail)
+                ->whereIn('state', ['1', 'pending_response', 'sent', 'enviado', 'enviada'])
+                ->exists();
+
+            if (!$isAuthorizedRecipient) {
+                Log::warning('🚨 UNAUTHORIZED EMAIL: Email not in recipients list', [
+                    'survey_id' => $surveyId,
+                    'unauthorized_email' => $decodedEmail,
+                    'hash' => substr($providedHash, 0, 16) . '...',
+                    'ip' => $request->ip(),
+                    'user_agent' => $request->userAgent(),
+                    'security_event' => 'UNAUTHORIZED_EMAIL_ACCESS'
+                ]);
+
+                return ['valid' => false, 'error_type' => 'unauthorized_email'];
+            }
+
+            Log::info('✅ Email authorized - found in recipients list', [
+                'survey_id' => $surveyId,
+                'email' => $decodedEmail
+            ]);
+
             // PRIMERO: Verificar si este usuario ya tiene un token registrado
             $accessToken = SurveyAccessToken::where('survey_id', $surveyId)
                 ->where('email', $decodedEmail)
@@ -1486,27 +1520,70 @@ class URLIntegrityService
                 return ['valid' => false, 'error_type' => 'link_blocked'];
             }
 
-            // PERMITIR: El mismo usuario puede acceder desde diferentes dispositivos/navegadores
-            // Solo actualizamos el fingerprint al más reciente
+            // DETECCIÓN DE LINK SHARING: Verificar si el cambio de dispositivo es sospechoso
             if (!$accessToken->isDeviceMatch($currentFingerprint)) {
-                Log::info('ℹ️ Device fingerprint changed - updating to new device', [
+
+                // IMPORTANTE: Calcular tiempo transcurrido ANTES de registrar el cambio
+                $minutesSinceFirstAccess = $accessToken->first_access_at ?
+                    now()->diffInMinutes($accessToken->first_access_at) : 999;
+
+                // BLOQUEO INMEDIATO: Cualquier cambio de dispositivo en menos de 10 minutos es sospechoso
+                if ($minutesSinceFirstAccess < 10) {
+                    Log::warning('🚨 LINK SHARING DETECTED: Device change too fast', [
+                        'survey_id' => $surveyId,
+                        'email' => $decodedEmail,
+                        'minutes_since_first_access' => $minutesSinceFirstAccess,
+                        'device_changes_count' => $accessToken->device_changes_count,
+                        'first_access' => $accessToken->first_access_at,
+                        'original_device' => $accessToken->device_fingerprint,
+                        'new_device' => $currentFingerprint,
+                        'original_ip' => $accessToken->ip_address,
+                        'new_ip' => $request->ip(),
+                        'security_event' => 'LINK_SHARING_RAPID_DEVICE_CHANGE',
+                        'threshold_minutes' => 10
+                    ]);
+
+                    // Bloquear el token
+                    $accessToken->blockAccess();
+
+                    return ['valid' => false, 'error_type' => 'link_sharing'];
+                }
+
+                // BLOQUEO SECUNDARIO: Más de 1 cambio de dispositivo (ya tuvo 1 cambio antes)
+                if ($accessToken->device_changes_count >= 1) {
+                    Log::warning('🚨 LINK SHARING DETECTED: Multiple device changes', [
+                        'survey_id' => $surveyId,
+                        'email' => $decodedEmail,
+                        'device_changes_count' => $accessToken->device_changes_count,
+                        'last_device_change' => $accessToken->last_device_change_at,
+                        'first_access' => $accessToken->first_access_at,
+                        'original_device' => $accessToken->device_fingerprint,
+                        'new_device' => $currentFingerprint,
+                        'security_event' => 'LINK_SHARING_MULTIPLE_DEVICES'
+                    ]);
+
+                    $accessToken->blockAccess();
+
+                    return ['valid' => false, 'error_type' => 'link_sharing'];
+                }
+
+                Log::info('ℹ️ Device fingerprint changed - registering first device change', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'original_device' => $accessToken->device_fingerprint,
                     'current_device' => $currentFingerprint,
-                    'original_user_agent' => $accessToken->user_agent,
-                    'current_user_agent' => $request->userAgent(),
-                    'note' => 'Same user from different device - allowed',
+                    'minutes_since_first_access' => $minutesSinceFirstAccess,
+                    'device_changes_count' => $accessToken->device_changes_count + 1,
+                    'note' => 'First device change allowed if >10 minutes',
                     'access_token_id' => $accessToken->id
                 ]);
 
-                // Actualizar el fingerprint al dispositivo actual
-                // El mismo usuario puede acceder desde Chrome, Firefox, celular, etc.
-                $accessToken->update([
-                    'device_fingerprint' => $currentFingerprint,
-                    'ip_address' => $request->ip(),
-                    'user_agent' => $request->userAgent()
-                ]);
+                // Registrar el cambio de dispositivo
+                $accessToken->registerDeviceChange(
+                    $currentFingerprint,
+                    $request->ip(),
+                    $request->userAgent()
+                );
             }
 
             // ACCESO VÁLIDO: Actualizar estadísticas
