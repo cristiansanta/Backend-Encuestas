@@ -384,6 +384,19 @@ class ManualSurveyResponseController extends Controller
                     $errorType = $deviceValidationResult['error_type'] ?? 'unknown';
 
                     switch ($errorType) {
+                        case 'unauthorized_email':
+                            \Log::warning('🚨 UNAUTHORIZED EMAIL BLOCKED', [
+                                'survey_id' => $surveyId,
+                                'email' => $email,
+                                'ip' => $request->ip(),
+                                'user_agent' => $request->userAgent()
+                            ]);
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Este enlace no está autorizado para tu correo electrónico. Solo los destinatarios autorizados pueden acceder.',
+                                'error_type' => 'unauthorized_email'
+                            ], 403);
+
                         case 'link_sharing':
                             \Log::warning('🚨 LINK SHARING BLOCKED', [
                                 'survey_id' => $surveyId,

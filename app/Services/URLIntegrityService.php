@@ -61,22 +61,29 @@ class URLIntegrityService
     {
         $request = request();
 
-        // ESTRATEGIA MEJORADA: Solo User-Agent sin IP
-        // Permite múltiples usuarios en la misma red corporativa/escuela
-        // La IP NO es un indicador confiable de "link sharing"
+        // ESTRATEGIA MEJORADA: Múltiples headers para diferenciar navegadores
+        // Brave, Chrome, Firefox tienen combinaciones únicas de headers
+        // NO incluye IP - permite múltiples usuarios en la misma red
         $fingerprintData = [
             'user_agent' => $request->userAgent(),
-            // NO incluir IP - múltiples usuarios legítimos pueden compartir IP
+            'accept' => $request->header('Accept', ''),
+            'accept_language' => $request->header('Accept-Language', ''),
+            'accept_encoding' => $request->header('Accept-Encoding', ''),
+            // Chrome/Brave envían estos headers, Firefox no
+            'sec_ch_ua' => $request->header('Sec-Ch-Ua', ''),
+            'sec_ch_ua_platform' => $request->header('Sec-Ch-Ua-Platform', ''),
+            'sec_ch_ua_mobile' => $request->header('Sec-Ch-Ua-Mobile', ''),
         ];
 
-        // Generar hash único del dispositivo basado SOLO en User-Agent
+        // Generar hash único del dispositivo basado en múltiples headers
         $fingerprintString = implode('|', $fingerprintData);
         $fingerprint = substr(hash('sha256', $fingerprintString), 0, 8);
 
-        Log::info('🔍 Device fingerprint generated (network-friendly)', [
+        Log::info('🔍 Device fingerprint generated (enhanced)', [
             'fingerprint' => $fingerprint,
             'user_agent_length' => strlen($fingerprintData['user_agent']),
-            'note' => 'IP not included - allows multiple users on same network'
+            'has_sec_ch_ua' => !empty($fingerprintData['sec_ch_ua']),
+            'note' => 'Multi-header fingerprint - differentiates Brave/Chrome/Firefox'
         ]);
 
         return $fingerprint;
@@ -1419,49 +1426,34 @@ class URLIntegrityService
             $currentFingerprint = self::generateDeviceFingerprint();
             $request = request();
 
-            // VALIDACIÓN CRÍTICA 1: Verificar que el hash sea VÁLIDO para este email específico
-            // Esto previene que Usuario B use el hash de Usuario A
-            $hashValidation = self::validateHashWithDetails($surveyId, $decodedEmail, $providedHash);
+            // ===============================================================
+            // BLOQUEO 100% EFECTIVO: Validar que el email está autorizado
+            // ===============================================================
+            // Verificar que este email está en la lista de destinatarios
+            $isAuthorizedRecipient = \App\Models\NotificationSurvaysModel::where('id_survey', $surveyId)
+                ->where('destinatario', $decodedEmail)
+                ->whereIn('state', ['1', 'pending_response', 'sent', 'enviado', 'enviada'])
+                ->exists();
 
-            if (!$hashValidation['valid']) {
-                // El hash NO es válido para este email
-                // Verificar si el hash pertenece a OTRO usuario (link sharing)
-                $existingHashForOtherUser = SurveyAccessToken::where('survey_id', $surveyId)
-                    ->where('hash', $providedHash)
-                    ->first();
-
-                if ($existingHashForOtherUser) {
-                    // INTENTO DE LINK SHARING DETECTADO
-                    Log::warning('🚨 LINK SHARING BLOCKED: Using hash from different user', [
-                        'survey_id' => $surveyId,
-                        'attempting_email' => $decodedEmail,
-                        'original_email' => $existingHashForOtherUser->email,
-                        'hash' => substr($providedHash, 0, 16) . '...',
-                        'original_user_ip' => $existingHashForOtherUser->ip_address,
-                        'current_ip' => $request->ip(),
-                        'hash_error_type' => $hashValidation['error_type'],
-                        'security_event' => 'LINK_SHARING_ATTEMPT_INVALID_HASH'
-                    ]);
-
-                    // Bloquear el hash original como medida de seguridad
-                    $existingHashForOtherUser->blockAccess();
-
-                    return ['valid' => false, 'error_type' => 'link_sharing'];
-                }
-
-                // Hash inválido pero no pertenece a nadie más (hash corrupto)
-                Log::warning('❌ Invalid hash - not valid for this email', [
+            if (!$isAuthorizedRecipient) {
+                Log::warning('🚨 UNAUTHORIZED EMAIL: Email not in recipients list', [
                     'survey_id' => $surveyId,
-                    'email' => $decodedEmail,
+                    'unauthorized_email' => $decodedEmail,
                     'hash' => substr($providedHash, 0, 16) . '...',
-                    'error_type' => $hashValidation['error_type'],
-                    'ip' => $request->ip()
+                    'ip' => $request->ip(),
+                    'user_agent' => $request->userAgent(),
+                    'security_event' => 'UNAUTHORIZED_EMAIL_ACCESS'
                 ]);
 
-                return ['valid' => false, 'error_type' => $hashValidation['error_type']];
+                return ['valid' => false, 'error_type' => 'unauthorized_email'];
             }
 
-            // VALIDACIÓN PRINCIPAL: survey_id + email + hash (único por usuario)
+            Log::info('✅ Email authorized - found in recipients list', [
+                'survey_id' => $surveyId,
+                'email' => $decodedEmail
+            ]);
+
+            // PRIMERO: Verificar si este usuario ya tiene un token registrado
             $accessToken = SurveyAccessToken::where('survey_id', $surveyId)
                 ->where('email', $decodedEmail)
                 ->where('hash', $providedHash)
@@ -1528,28 +1520,70 @@ class URLIntegrityService
                 return ['valid' => false, 'error_type' => 'link_blocked'];
             }
 
-            // VALIDACIÓN CRÍTICA: Verificar device fingerprint para detectar link sharing
+            // DETECCIÓN DE LINK SHARING: Verificar si el cambio de dispositivo es sospechoso
             if (!$accessToken->isDeviceMatch($currentFingerprint)) {
-                // Device fingerprint diferente = POSIBLE LINK SHARING
-                Log::warning('🚨 LINK SHARING DETECTED: Different device fingerprint', [
+
+                // IMPORTANTE: Calcular tiempo transcurrido ANTES de registrar el cambio
+                $minutesSinceFirstAccess = $accessToken->first_access_at ?
+                    now()->diffInMinutes($accessToken->first_access_at) : 999;
+
+                // BLOQUEO INMEDIATO: Cualquier cambio de dispositivo en menos de 10 minutos es sospechoso
+                if ($minutesSinceFirstAccess < 10) {
+                    Log::warning('🚨 LINK SHARING DETECTED: Device change too fast', [
+                        'survey_id' => $surveyId,
+                        'email' => $decodedEmail,
+                        'minutes_since_first_access' => $minutesSinceFirstAccess,
+                        'device_changes_count' => $accessToken->device_changes_count,
+                        'first_access' => $accessToken->first_access_at,
+                        'original_device' => $accessToken->device_fingerprint,
+                        'new_device' => $currentFingerprint,
+                        'original_ip' => $accessToken->ip_address,
+                        'new_ip' => $request->ip(),
+                        'security_event' => 'LINK_SHARING_RAPID_DEVICE_CHANGE',
+                        'threshold_minutes' => 10
+                    ]);
+
+                    // Bloquear el token
+                    $accessToken->blockAccess();
+
+                    return ['valid' => false, 'error_type' => 'link_sharing'];
+                }
+
+                // BLOQUEO SECUNDARIO: Más de 1 cambio de dispositivo (ya tuvo 1 cambio antes)
+                if ($accessToken->device_changes_count >= 1) {
+                    Log::warning('🚨 LINK SHARING DETECTED: Multiple device changes', [
+                        'survey_id' => $surveyId,
+                        'email' => $decodedEmail,
+                        'device_changes_count' => $accessToken->device_changes_count,
+                        'last_device_change' => $accessToken->last_device_change_at,
+                        'first_access' => $accessToken->first_access_at,
+                        'original_device' => $accessToken->device_fingerprint,
+                        'new_device' => $currentFingerprint,
+                        'security_event' => 'LINK_SHARING_MULTIPLE_DEVICES'
+                    ]);
+
+                    $accessToken->blockAccess();
+
+                    return ['valid' => false, 'error_type' => 'link_sharing'];
+                }
+
+                Log::info('ℹ️ Device fingerprint changed - registering first device change', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'original_device' => $accessToken->device_fingerprint,
                     'current_device' => $currentFingerprint,
-                    'original_ip' => $accessToken->ip_address,
-                    'current_ip' => $request->ip(),
-                    'original_user_agent' => $accessToken->user_agent,
-                    'current_user_agent' => $request->userAgent(),
-                    'access_count_before_block' => $accessToken->access_count,
-                    'first_access_at' => $accessToken->first_access_at,
-                    'security_event' => 'LINK_SHARING_DIFFERENT_DEVICE',
+                    'minutes_since_first_access' => $minutesSinceFirstAccess,
+                    'device_changes_count' => $accessToken->device_changes_count + 1,
+                    'note' => 'First device change allowed if >10 minutes',
                     'access_token_id' => $accessToken->id
                 ]);
 
-                // BLOQUEAR el token inmediatamente
-                $accessToken->blockAccess();
-
-                return ['valid' => false, 'error_type' => 'link_sharing'];
+                // Registrar el cambio de dispositivo
+                $accessToken->registerDeviceChange(
+                    $currentFingerprint,
+                    $request->ip(),
+                    $request->userAgent()
+                );
             }
 
             // ACCESO VÁLIDO: Actualizar estadísticas
