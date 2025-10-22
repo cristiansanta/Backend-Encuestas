@@ -243,12 +243,21 @@ class SurveyEmailController extends Controller
                 'email' => $data['email']
             ]);
 
-            // Generar la URL de la encuesta con formato email+hash (compatible con sistema existente)
-            // Crear hash similar al sistema de validación existente
-            $baseHash = $data['survey_id'] . '-' . $data['email'];
-            $hash = base64_encode($baseHash);
-            // Limpiar caracteres especiales del hash para URL
-            $hash = str_replace(['+', '/', '='], ['', '', ''], $hash);
+            // UNIFICADO: Usar sistema HMAC seguro de URLIntegrityService
+            // Esto garantiza hashes consistentes de ~58 caracteres con timestamp y HMAC
+            $hash = \App\Services\URLIntegrityService::generateHash(
+                $data['survey_id'],
+                $data['email'],
+                'standard' // Tipo de hash: standard, fallback, reminder
+            );
+
+            Log::info('🔐 Hash HMAC generado en SurveyEmailController', [
+                'survey_id' => $data['survey_id'],
+                'email' => $data['email'],
+                'hash_length' => strlen($hash),
+                'hash_preview' => substr($hash, 0, 20) . '...',
+                'note' => 'Using unified HMAC system from URLIntegrityService'
+            ]);
 
             $surveyUrl = config('app.frontend_url', 'http://149.130.180.163:5173') .
                         '/encuestados/survey-view-manual/' . $data['survey_id'] .

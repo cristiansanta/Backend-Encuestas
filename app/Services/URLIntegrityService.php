@@ -255,10 +255,11 @@ class URLIntegrityService
             // COMPATIBILIDAD: Distinguir entre HMAC y hash legacy simple
             $testDecode = @base64_decode(strtr($providedHash, '-_', '+/'));
 
-            // HMAC tiene formato: surveyId.deviceFingerprint.timestamp (múltiples puntos como separadores)
+            // HMAC tiene formato: timestamp.hmac (número.hexadecimal)
             // Legacy tiene formato: surveyId-email o surveyId-email-timestamp (guiones como separadores)
-            if ($testDecode && preg_match('/^\d+\.\w+\.\d+/', $testDecode)) {
-                // Hash nuevo (HMAC) - patrón número.string.número
+            // CRÍTICO: Usar regex correcto para detectar HMAC (número.string, no número.string.número)
+            if ($testDecode && preg_match('/^\d+\.\w+$/', $testDecode)) {
+                // Hash nuevo (HMAC) - patrón timestamp.hmac
                 return self::validateHMACHashWithDetails($surveyId, $decodedEmail, $providedHash);
             } else {
                 // Hash antiguo (base64 simple) - puede incluir timestamp
@@ -459,17 +460,21 @@ class URLIntegrityService
                 }
             }
 
-            // CAMBIADO: No bloquear - solo advertir para evitar falsos positivos
-            Log::warning('⚠️ HMAC validation failed (but allowing)', [
+            // CRÍTICO DE SEGURIDAD: Si la validación HMAC falla, BLOQUEAR
+            // El hash NO coincide con ningún HMAC válido generado por el sistema
+            Log::error('🚨 SECURITY: HMAC validation failed - Hash was modified or is invalid', [
                 'survey_id' => $surveyId,
                 'email' => $decodedEmail,
                 'provided_hash' => $providedHash,
                 'hash_parts_count' => count($hashParts),
+                'decoded_hash' => $decodedHash,
+                'security_event' => 'HMAC_VALIDATION_FAILED',
+                'attack_type' => 'HMAC_MANIPULATION_ATTEMPT',
                 'ip' => request()->ip(),
-                'note' => 'HMAC validation failed - allowing to prevent false positives'
+                'user_agent' => request()->userAgent()
             ]);
-            // NO BLOQUEAR - permitir acceso (solo access_count debe bloquear)
-            return ['valid' => true, 'error_type' => null];
+            // BLOQUEAR - El hash HMAC no es válido
+            return ['valid' => false, 'error_type' => 'hash_tampering'];
 
         } catch (\Exception $e) {
             // CAMBIADO: No bloquear en excepciones - solo advertir
@@ -613,23 +618,23 @@ class URLIntegrityService
 
             // VALIDACIÓN CRÍTICA: El hash debe ser válido en base64
             if ($decodedHash === false) {
-                // CAMBIADO: No bloquear - solo advertir para evitar falsos positivos
-                Log::warning('⚠️ Invalid base64 hash (but allowing)', [
+                // CRÍTICO DE SEGURIDAD: Hash corrupto o modificado - BLOQUEAR
+                Log::error('🚨 SECURITY: Invalid base64 hash - Hash was modified or corrupted', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'provided_hash' => $providedHash,
                     'ip' => request()->ip(),
                     'security_event' => 'INVALID_BASE64_HASH',
-                    'note' => 'Base64 decode failed - allowing to prevent false positives'
+                    'attack_type' => 'HASH_CORRUPTION_ATTEMPT'
                 ]);
-                // NO BLOQUEAR - permitir acceso (solo access_count debe bloquear)
-                return ['valid' => true, 'error_type' => null];
+                // BLOQUEAR - Hash inválido/modificado
+                return ['valid' => false, 'error_type' => 'hash_tampering'];
             }
 
             // VALIDACIÓN CRÍTICA: El hash decodificado debe tener contenido mínimo
             if (empty($decodedHash) || strlen($decodedHash) < 5) {
-                // CAMBIADO: No bloquear - solo advertir para evitar falsos positivos
-                Log::warning('⚠️ Hash decoded content too short (but allowing)', [
+                // CRÍTICO DE SEGURIDAD: Hash demasiado corto - probablemente manipulado
+                Log::error('🚨 SECURITY: Hash content too short - Hash was likely modified', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'provided_hash' => $providedHash,
@@ -637,10 +642,10 @@ class URLIntegrityService
                     'decoded_content' => $decodedHash,
                     'ip' => request()->ip(),
                     'security_event' => 'HASH_TOO_SHORT',
-                    'note' => 'Short hash content - allowing to prevent false positives'
+                    'attack_type' => 'HASH_TRUNCATION_ATTEMPT'
                 ]);
-                // NO BLOQUEAR - permitir acceso (solo access_count debe bloquear)
-                return ['valid' => true, 'error_type' => null];
+                // BLOQUEAR - Hash inválido
+                return ['valid' => false, 'error_type' => 'hash_tampering'];
             }
 
             Log::info('🔍 Hash decoded content', [
@@ -699,8 +704,9 @@ class URLIntegrityService
                 ]);
 
                 // VALIDACIÓN ESTRICTA LEGACY: El email debe coincidir EXACTAMENTE con el patrón del hash
+                // NOTA: Removido requisito de >= 8 chars para permitir hashes legacy cortos legítimos
+                // La validación validateLegacyEmailIntegrity ya incluye verificaciones suficientes
                 if (strpos($decodedEmail, $hashEmailPart) === 0 && // Email comienza con la parte del hash
-                    strlen($hashEmailPart) >= 8 && // Mínimo 8 caracteres para ser confiable
                     self::validateLegacyEmailIntegrity($decodedEmail, $hashEmailPart)) { // Validación adicional
 
                     Log::info('✅ Legacy hash validation successful - EXACT PREFIX MATCH WITH INTEGRITY CHECK', [
@@ -714,19 +720,20 @@ class URLIntegrityService
                     return ['valid' => true, 'error_type' => null];
                 }
 
-                // CAMBIADO: No bloquear - solo advertir para evitar falsos positivos
-                Log::warning('⚠️ Legacy hash validation - Email mismatch (but allowing)', [
+                // CRÍTICO DE SEGURIDAD: BLOQUEAR si el email NO coincide con el hash
+                Log::error('🚨 SECURITY VIOLATION: Email does NOT match hash - BLOCKING ACCESS', [
                     'survey_id' => $surveyId,
                     'provided_email' => $decodedEmail,
                     'hash_email_part' => $hashEmailPart,
                     'email_starts_with_hash' => strpos($decodedEmail, $hashEmailPart) === 0,
                     'hash_part_length' => strlen($hashEmailPart),
-                    'security_event' => 'EMAIL_MISMATCH_WARNING',
-                    'note' => 'Email mismatch detected - allowing to prevent false positives',
+                    'security_event' => 'EMAIL_HASH_MISMATCH',
+                    'attack_type' => 'EMAIL_MANIPULATION_ATTEMPT',
                     'ip' => request()->ip(),
                     'user_agent' => request()->userAgent()
                 ]);
-                // NO BLOQUEAR - continuar con validaciones alternativas
+                // BLOQUEAR INMEDIATAMENTE - El email fue manipulado
+                return ['valid' => false, 'error_type' => 'hash_tampering'];
             }
 
             // FORMATO NUEVO: Intentar reconstruir el hash EXACTAMENTE como se generó
@@ -759,8 +766,8 @@ class URLIntegrityService
             }
 
             // Si llegamos aquí, el hash no tiene ningún formato conocido
-            // CAMBIADO: No bloquear - solo advertir para evitar falsos positivos
-            Log::warning('⚠️ Hash format not recognized (but allowing)', [
+            // CRÍTICO DE SEGURIDAD: Hash con formato desconocido - probablemente manipulado
+            Log::error('🚨 SECURITY: Hash format not recognized - Likely hash manipulation', [
                 'survey_id' => $surveyId,
                 'email' => $decodedEmail,
                 'provided_hash' => $providedHash,
@@ -769,11 +776,11 @@ class URLIntegrityService
                 'ip' => request()->ip(),
                 'user_agent' => request()->userAgent(),
                 'security_event' => 'UNKNOWN_HASH_FORMAT',
-                'note' => 'Hash format not recognized - allowing to prevent false positives'
+                'attack_type' => 'HASH_FORMAT_MANIPULATION'
             ]);
 
-            // NO BLOQUEAR - permitir acceso (solo access_count debe bloquear)
-            return ['valid' => true, 'error_type' => null];
+            // BLOQUEAR - Formato de hash no reconocido
+            return ['valid' => false, 'error_type' => 'hash_tampering'];
 
         } catch (\Exception $e) {
             // CAMBIADO: No bloquear en excepciones - solo advertir
@@ -1174,11 +1181,14 @@ class URLIntegrityService
             }
 
             // VALIDACIÓN 2: La parte del hash debe ser lo suficientemente larga
-            if (strlen($hashEmailPart) < 8) {
-                Log::warning('❌ Hash email part too short for secure validation', [
+            // EXCEPCIÓN: Si el hash es corto pero contiene @ (email completo), permitir
+            $hasAtSymbol = strpos($hashEmailPart, '@') !== false;
+            if (strlen($hashEmailPart) < 8 && !$hasAtSymbol) {
+                Log::warning('❌ Hash email part too short for secure validation (and no @ symbol)', [
                     'provided_email' => $providedEmail,
                     'hash_email_part' => $hashEmailPart,
                     'hash_length' => strlen($hashEmailPart),
+                    'has_at_symbol' => $hasAtSymbol,
                     'ip' => request()->ip()
                 ]);
                 return false;
@@ -1210,66 +1220,13 @@ class URLIntegrityService
                 return false;
             }
 
-            // VALIDACIÓN CRÍTICA: Detectar truncamiento del email
-            // Si la parte del hash no incluye "@", la continuación debe ser específica
-            if (!strpos($hashEmailPart, '@')) {
-                // El hash no incluye el dominio, debemos validar que la continuación no sea arbitraria
-                // Para el caso específico: "andrwgme" debe continuar con "z68@gmail.com", no "z6@gmail.com"
-
-                // Calcular la longitud esperada del email basada en patrones comunes
-                $atPosition = strpos($providedEmail, '@');
-                if ($atPosition !== false) {
-                    $localPart = substr($providedEmail, 0, $atPosition);
-                    $localPartFromHash = strlen($hashEmailPart);
-                    $localPartRemaining = strlen($localPart) - $localPartFromHash;
-
-                    // VALIDACIÓN ANTI-TRUNCAMIENTO: Si el email parece muy corto comparado con el hash
-                    // Es sospechoso que alguien quite caracteres
-                    if ($localPartRemaining < 3 && strlen($hashEmailPart) >= 7) {
-                        Log::warning('❌ Email truncation detected - local part too short after hash', [
-                            'provided_email' => $providedEmail,
-                            'hash_email_part' => $hashEmailPart,
-                            'local_part' => $localPart,
-                            'local_part_from_hash' => $localPartFromHash,
-                            'local_part_remaining' => $localPartRemaining,
-                            'ip' => request()->ip(),
-                            'security_event' => 'EMAIL_TRUNCATION_DETECTED'
-                        ]);
-                        return false;
-                    }
-
-                    // VALIDACIÓN ADICIONAL: Para hashes como "andrwgme", esperamos continuaciones como "z68" no solo "z6"
-                    if ($hashEmailPart === 'andrwgme') {
-                        $expectedContinuation = substr($localPart, strlen($hashEmailPart));
-                        // Para este caso específico, debe ser "z68" y nada más corto
-                        if (strlen($expectedContinuation) < 3) {
-                            Log::warning('❌ CRITICAL: Email manipulation detected - character removal from andrwgme hash', [
-                                'provided_email' => $providedEmail,
-                                'hash_email_part' => $hashEmailPart,
-                                'expected_continuation' => $expectedContinuation,
-                                'continuation_length' => strlen($expectedContinuation),
-                                'ip' => request()->ip(),
-                                'security_event' => 'ANDRWGME_TRUNCATION_ATTACK'
-                            ]);
-                            return false;
-                        }
-
-                        // VALIDACIÓN CRÍTICA DEL DOMINIO: Para hash "andrwgme", verificar que el dominio sea el correcto
-                        $domain = substr($providedEmail, $atPosition + 1);
-                        if ($domain !== 'gmail.com') {
-                            Log::warning('❌ CRITICAL: Domain manipulation detected for andrwgme hash', [
-                                'provided_email' => $providedEmail,
-                                'hash_email_part' => $hashEmailPart,
-                                'provided_domain' => $domain,
-                                'expected_domain' => 'gmail.com',
-                                'ip' => request()->ip(),
-                                'security_event' => 'ANDRWGME_DOMAIN_MANIPULATION'
-                            ]);
-                            return false;
-                        }
-                    }
-                }
-            }
+            // NOTA: Las validaciones hardcoded específicas fueron removidas para evitar falsos positivos
+            // El sistema de validación ya incluye:
+            // 1. Verificación de que el email comienza con la parte del hash (línea 1168)
+            // 2. Validación de longitud mínima del hash (línea 1178)
+            // 3. Validación de formato de email (línea 1189)
+            // 4. Validación de longitud del resto del email (línea 1203)
+            // Estas validaciones genéricas son suficientes para detectar manipulaciones sin bloquear usuarios legítimos
 
             // VALIDACIÓN 5: El dominio debe estar en la parte hash o en la continuación
             if (!strpos($providedEmail, '@')) {
