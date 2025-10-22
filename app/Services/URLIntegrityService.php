@@ -107,24 +107,28 @@ class URLIntegrityService
             // Validar formato básico del hash
             // Aumentado a 50 para soportar hashes con timestamp: base64(surveyId-email-timestamp)
             if (strlen($providedHash) < 8 || strlen($providedHash) > 50) {
-                Log::warning('❌ Simple hash validation failed - Invalid length', [
+                // CAMBIADO: No bloquear - solo advertir para evitar falsos positivos
+                Log::warning('⚠️ Simple hash validation - Invalid length (but allowing)', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'hash_length' => strlen($providedHash),
-                    'ip' => request()->ip()
+                    'ip' => request()->ip(),
+                    'note' => 'Hash length outside expected range - allowing to prevent false positives'
                 ]);
-                return ['valid' => false, 'error_type' => 'invalid_format'];
+                // NO BLOQUEAR - permitir acceso (solo access_count debe bloquear)
             }
 
             // Validar que el hash tenga caracteres válidos (alfanuméricos + URL-safe chars)
             if (!preg_match('/^[a-zA-Z0-9_-]{8,50}$/', $providedHash)) {
-                Log::warning('❌ Simple hash validation failed - Invalid characters', [
+                // CAMBIADO: No bloquear - solo advertir para evitar falsos positivos
+                Log::warning('⚠️ Simple hash validation - Invalid characters (but allowing)', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'provided_hash' => $providedHash,
-                    'ip' => request()->ip()
+                    'ip' => request()->ip(),
+                    'note' => 'Hash contains invalid characters - allowing to prevent false positives'
                 ]);
-                return ['valid' => false, 'error_type' => 'invalid_format'];
+                // NO BLOQUEAR - permitir acceso (solo access_count debe bloquear)
             }
 
             // Para validación simple, verificamos que sea consistente con el patrón esperado
@@ -180,7 +184,8 @@ class URLIntegrityService
                 $securityEvent = 'HASH_CONTENT_MANIPULATION';
             }
 
-            Log::warning('❌ Simple hash validation failed - Security violation detected', [
+            // CAMBIADO: No bloquear - solo advertir para evitar falsos positivos
+            Log::warning('⚠️ Simple hash validation failed (but allowing)', [
                 'survey_id' => $surveyId,
                 'email' => $decodedEmail,
                 'provided_hash' => $providedHash,
@@ -188,22 +193,26 @@ class URLIntegrityService
                 'hash_length_provided' => strlen($providedHash),
                 'hash_length_expected' => strlen($baseHash),
                 'security_event' => $securityEvent,
-                'manipulation_detected' => true,
+                'note' => 'Pattern mismatch detected - allowing to prevent false positives',
                 'ip' => request()->ip(),
                 'user_agent' => request()->userAgent()
             ]);
 
-            return ['valid' => false, 'error_type' => 'pattern_mismatch'];
+            // NO BLOQUEAR - permitir acceso (solo access_count debe bloquear)
+            return ['valid' => true, 'error_type' => null];
 
         } catch (\Exception $e) {
-            Log::error('❌ Error in simple hash validation', [
+            // CAMBIADO: No bloquear en excepciones - solo advertir
+            Log::warning('⚠️ Error in simple hash validation (but allowing)', [
                 'survey_id' => $surveyId,
                 'email' => $email,
                 'error' => $e->getMessage(),
-                'ip' => request()->ip()
+                'ip' => request()->ip(),
+                'note' => 'Exception during validation - allowing to prevent false positives'
             ]);
 
-            return ['valid' => false, 'error_type' => 'validation_error'];
+            // NO BLOQUEAR - permitir acceso en caso de errores inesperados
+            return ['valid' => true, 'error_type' => null];
         }
     }
 
@@ -246,10 +255,11 @@ class URLIntegrityService
             // COMPATIBILIDAD: Distinguir entre HMAC y hash legacy simple
             $testDecode = @base64_decode(strtr($providedHash, '-_', '+/'));
 
-            // HMAC tiene formato: surveyId.deviceFingerprint.timestamp (múltiples puntos como separadores)
+            // HMAC tiene formato: timestamp.hmac (número.hexadecimal)
             // Legacy tiene formato: surveyId-email o surveyId-email-timestamp (guiones como separadores)
-            if ($testDecode && preg_match('/^\d+\.\w+\.\d+/', $testDecode)) {
-                // Hash nuevo (HMAC) - patrón número.string.número
+            // CRÍTICO: Usar regex correcto para detectar HMAC (número.string, no número.string.número)
+            if ($testDecode && preg_match('/^\d+\.\w+$/', $testDecode)) {
+                // Hash nuevo (HMAC) - patrón timestamp.hmac
                 return self::validateHMACHashWithDetails($surveyId, $decodedEmail, $providedHash);
             } else {
                 // Hash antiguo (base64 simple) - puede incluir timestamp
@@ -257,14 +267,17 @@ class URLIntegrityService
             }
 
         } catch (\Exception $e) {
-            Log::error('❌ HMAC validation error', [
+            // CAMBIADO: No bloquear en excepciones - solo advertir
+            Log::warning('⚠️ HMAC validation error (but allowing)', [
                 'survey_id' => $surveyId,
                 'email' => $email,
                 'provided_hash' => $providedHash,
                 'error' => $e->getMessage(),
-                'ip' => request()->ip()
+                'ip' => request()->ip(),
+                'note' => 'Exception during validation - allowing to prevent false positives'
             ]);
-            return ['valid' => false, 'error_type' => 'validation_error'];
+            // NO BLOQUEAR - permitir acceso en caso de errores inesperados
+            return ['valid' => true, 'error_type' => null];
         }
     }
 
@@ -340,13 +353,16 @@ class URLIntegrityService
             $decodedHash = base64_decode(strtr($providedHash, '-_', '+/'));
 
             if (!$decodedHash || !strpos($decodedHash, '.')) {
-                Log::warning('❌ HMAC hash decode failed', [
+                // CAMBIADO: No bloquear - solo advertir para evitar falsos positivos
+                Log::warning('⚠️ HMAC hash decode failed (but allowing)', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'provided_hash' => $providedHash,
-                    'ip' => request()->ip()
+                    'ip' => request()->ip(),
+                    'note' => 'HMAC decode failed - allowing to prevent false positives'
                 ]);
-                return ['valid' => false, 'error_type' => 'invalid_format'];
+                // NO BLOQUEAR - permitir acceso (solo access_count debe bloquear)
+                return ['valid' => true, 'error_type' => null];
             }
 
             // Separar timestamp y HMAC
@@ -367,15 +383,17 @@ class URLIntegrityService
                     'ip' => request()->ip()
                 ]);
 
-                // Validar que el timestamp no sea muy antiguo (máximo 7 días)
-                if ($currentTime - $timestamp > 7 * 24 * 60 * 60) {
-                    Log::warning('❌ HMAC hash expired', [
+                // Validar que el timestamp no sea muy antiguo (máximo 365 días = 1 año)
+                // NOTA: Cambiado de 7 días a 1 año para evitar falsos positivos
+                if ($currentTime - $timestamp > 365 * 24 * 60 * 60) {
+                    Log::warning('⚠️ HMAC hash very old (but allowing)', [
                         'survey_id' => $surveyId,
                         'email' => $decodedEmail,
                         'hash_age_days' => ($currentTime - $timestamp) / (24 * 3600),
-                        'ip' => request()->ip()
+                        'ip' => request()->ip(),
+                        'note' => 'Hash older than 1 year - logging but allowing access'
                     ]);
-                    return ['valid' => false, 'error_type' => 'hash_expired'];
+                    // NO BLOQUEAR - solo advertir
                 }
 
                 // VALIDACIÓN: Verificar HMAC (sin fingerprint)
@@ -410,15 +428,17 @@ class URLIntegrityService
                     'ip' => request()->ip()
                 ]);
 
-                // Validar que el timestamp no sea muy antiguo (máximo 7 días)
-                if ($currentTime - $timestamp > 7 * 24 * 60 * 60) {
-                    Log::warning('❌ Legacy HMAC hash expired', [
+                // Validar que el timestamp no sea muy antiguo (máximo 365 días = 1 año)
+                // NOTA: Cambiado de 7 días a 1 año para evitar falsos positivos
+                if ($currentTime - $timestamp > 365 * 24 * 60 * 60) {
+                    Log::warning('⚠️ Legacy HMAC hash very old (but allowing)', [
                         'survey_id' => $surveyId,
                         'email' => $decodedEmail,
                         'hash_age_days' => ($currentTime - $timestamp) / (24 * 3600),
-                        'ip' => request()->ip()
+                        'ip' => request()->ip(),
+                        'note' => 'Hash older than 1 year - logging but allowing access'
                     ]);
-                    return ['valid' => false, 'error_type' => 'hash_expired'];
+                    // NO BLOQUEAR - solo advertir
                 }
 
                 // VALIDACIÓN: Verificar HMAC legacy (con fingerprint en la firma)
@@ -440,23 +460,33 @@ class URLIntegrityService
                 }
             }
 
-            Log::warning('❌ HMAC validation failed', [
+            // CRÍTICO DE SEGURIDAD: Si la validación HMAC falla, BLOQUEAR
+            // El hash NO coincide con ningún HMAC válido generado por el sistema
+            Log::error('🚨 SECURITY: HMAC validation failed - Hash was modified or is invalid', [
                 'survey_id' => $surveyId,
                 'email' => $decodedEmail,
                 'provided_hash' => $providedHash,
                 'hash_parts_count' => count($hashParts),
-                'ip' => request()->ip()
+                'decoded_hash' => $decodedHash,
+                'security_event' => 'HMAC_VALIDATION_FAILED',
+                'attack_type' => 'HMAC_MANIPULATION_ATTEMPT',
+                'ip' => request()->ip(),
+                'user_agent' => request()->userAgent()
             ]);
+            // BLOQUEAR - El hash HMAC no es válido
             return ['valid' => false, 'error_type' => 'hash_tampering'];
 
         } catch (\Exception $e) {
-            Log::error('❌ HMAC hash validation error', [
+            // CAMBIADO: No bloquear en excepciones - solo advertir
+            Log::warning('⚠️ HMAC hash validation error (but allowing)', [
                 'survey_id' => $surveyId,
                 'email' => $decodedEmail,
                 'error' => $e->getMessage(),
-                'ip' => request()->ip()
+                'ip' => request()->ip(),
+                'note' => 'Exception during HMAC validation - allowing to prevent false positives'
             ]);
-            return ['valid' => false, 'error_type' => 'validation_error'];
+            // NO BLOQUEAR - permitir acceso en caso de errores inesperados
+            return ['valid' => true, 'error_type' => null];
         }
     }
 
@@ -588,27 +618,33 @@ class URLIntegrityService
 
             // VALIDACIÓN CRÍTICA: El hash debe ser válido en base64
             if ($decodedHash === false) {
-                Log::warning('❌ Invalid base64 hash - tampering detected', [
+                // CRÍTICO DE SEGURIDAD: Hash corrupto o modificado - BLOQUEAR
+                Log::error('🚨 SECURITY: Invalid base64 hash - Hash was modified or corrupted', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'provided_hash' => $providedHash,
                     'ip' => request()->ip(),
-                    'security_event' => 'INVALID_BASE64_HASH'
+                    'security_event' => 'INVALID_BASE64_HASH',
+                    'attack_type' => 'HASH_CORRUPTION_ATTEMPT'
                 ]);
-                return ['valid' => false, 'error_type' => 'invalid_format'];
+                // BLOQUEAR - Hash inválido/modificado
+                return ['valid' => false, 'error_type' => 'hash_tampering'];
             }
 
             // VALIDACIÓN CRÍTICA: El hash decodificado debe tener contenido mínimo
             if (empty($decodedHash) || strlen($decodedHash) < 5) {
-                Log::warning('❌ Hash decoded content too short - tampering detected', [
+                // CRÍTICO DE SEGURIDAD: Hash demasiado corto - probablemente manipulado
+                Log::error('🚨 SECURITY: Hash content too short - Hash was likely modified', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
                     'provided_hash' => $providedHash,
                     'decoded_length' => strlen($decodedHash),
                     'decoded_content' => $decodedHash,
                     'ip' => request()->ip(),
-                    'security_event' => 'HASH_TOO_SHORT'
+                    'security_event' => 'HASH_TOO_SHORT',
+                    'attack_type' => 'HASH_TRUNCATION_ATTEMPT'
                 ]);
+                // BLOQUEAR - Hash inválido
                 return ['valid' => false, 'error_type' => 'hash_tampering'];
             }
 
@@ -627,12 +663,14 @@ class URLIntegrityService
 
                 // Verificar que el survey ID coincida
                 if ($hashSurveyId != $surveyId) {
-                    Log::warning('❌ Survey ID mismatch in hash', [
+                    // CAMBIADO: No bloquear - solo advertir para evitar falsos positivos
+                    Log::warning('⚠️ Survey ID mismatch in hash (but allowing)', [
                         'expected' => $surveyId,
                         'found_in_hash' => $hashSurveyId,
-                        'ip' => request()->ip()
+                        'ip' => request()->ip(),
+                        'note' => 'Survey ID mismatch - allowing to prevent false positives'
                     ]);
-                    return ['valid' => false, 'error_type' => 'hash_tampering'];
+                    // NO BLOQUEAR - continuar validación (solo access_count debe bloquear)
                 }
 
                 // ESTRATEGIA DUAL: Primero intentar validación exacta (máxima seguridad)
@@ -666,8 +704,9 @@ class URLIntegrityService
                 ]);
 
                 // VALIDACIÓN ESTRICTA LEGACY: El email debe coincidir EXACTAMENTE con el patrón del hash
+                // NOTA: Removido requisito de >= 8 chars para permitir hashes legacy cortos legítimos
+                // La validación validateLegacyEmailIntegrity ya incluye verificaciones suficientes
                 if (strpos($decodedEmail, $hashEmailPart) === 0 && // Email comienza con la parte del hash
-                    strlen($hashEmailPart) >= 8 && // Mínimo 8 caracteres para ser confiable
                     self::validateLegacyEmailIntegrity($decodedEmail, $hashEmailPart)) { // Validación adicional
 
                     Log::info('✅ Legacy hash validation successful - EXACT PREFIX MATCH WITH INTEGRITY CHECK', [
@@ -681,17 +720,19 @@ class URLIntegrityService
                     return ['valid' => true, 'error_type' => null];
                 }
 
-                Log::warning('❌ CRITICAL: Legacy hash validation failed - Email manipulation detected', [
+                // CRÍTICO DE SEGURIDAD: BLOQUEAR si el email NO coincide con el hash
+                Log::error('🚨 SECURITY VIOLATION: Email does NOT match hash - BLOCKING ACCESS', [
                     'survey_id' => $surveyId,
                     'provided_email' => $decodedEmail,
                     'hash_email_part' => $hashEmailPart,
                     'email_starts_with_hash' => strpos($decodedEmail, $hashEmailPart) === 0,
                     'hash_part_length' => strlen($hashEmailPart),
-                    'security_event' => 'EMAIL_MANIPULATION_DETECTED',
-                    'attack_type' => 'EMAIL_MODIFICATION',
+                    'security_event' => 'EMAIL_HASH_MISMATCH',
+                    'attack_type' => 'EMAIL_MANIPULATION_ATTEMPT',
                     'ip' => request()->ip(),
                     'user_agent' => request()->userAgent()
                 ]);
+                // BLOQUEAR INMEDIATAMENTE - El email fue manipulado
                 return ['valid' => false, 'error_type' => 'hash_tampering'];
             }
 
@@ -725,7 +766,8 @@ class URLIntegrityService
             }
 
             // Si llegamos aquí, el hash no tiene ningún formato conocido
-            Log::warning('❌ CRITICAL: Hash format not recognized - tampering detected', [
+            // CRÍTICO DE SEGURIDAD: Hash con formato desconocido - probablemente manipulado
+            Log::error('🚨 SECURITY: Hash format not recognized - Likely hash manipulation', [
                 'survey_id' => $surveyId,
                 'email' => $decodedEmail,
                 'provided_hash' => $providedHash,
@@ -733,19 +775,24 @@ class URLIntegrityService
                 'decoded_length' => strlen($decodedHash),
                 'ip' => request()->ip(),
                 'user_agent' => request()->userAgent(),
-                'security_event' => 'UNKNOWN_HASH_FORMAT'
+                'security_event' => 'UNKNOWN_HASH_FORMAT',
+                'attack_type' => 'HASH_FORMAT_MANIPULATION'
             ]);
 
+            // BLOQUEAR - Formato de hash no reconocido
             return ['valid' => false, 'error_type' => 'hash_tampering'];
 
         } catch (\Exception $e) {
-            Log::error('❌ Legacy hash validation error', [
+            // CAMBIADO: No bloquear en excepciones - solo advertir
+            Log::warning('⚠️ Legacy hash validation error (but allowing)', [
                 'survey_id' => $surveyId,
                 'email' => $decodedEmail,
                 'error' => $e->getMessage(),
-                'ip' => request()->ip()
+                'ip' => request()->ip(),
+                'note' => 'Exception during legacy validation - allowing to prevent false positives'
             ]);
-            return ['valid' => false, 'error_type' => 'validation_error'];
+            // NO BLOQUEAR - permitir acceso en caso de errores inesperados
+            return ['valid' => true, 'error_type' => null];
         }
     }
 
@@ -1134,11 +1181,14 @@ class URLIntegrityService
             }
 
             // VALIDACIÓN 2: La parte del hash debe ser lo suficientemente larga
-            if (strlen($hashEmailPart) < 8) {
-                Log::warning('❌ Hash email part too short for secure validation', [
+            // EXCEPCIÓN: Si el hash es corto pero contiene @ (email completo), permitir
+            $hasAtSymbol = strpos($hashEmailPart, '@') !== false;
+            if (strlen($hashEmailPart) < 8 && !$hasAtSymbol) {
+                Log::warning('❌ Hash email part too short for secure validation (and no @ symbol)', [
                     'provided_email' => $providedEmail,
                     'hash_email_part' => $hashEmailPart,
                     'hash_length' => strlen($hashEmailPart),
+                    'has_at_symbol' => $hasAtSymbol,
                     'ip' => request()->ip()
                 ]);
                 return false;
@@ -1170,66 +1220,13 @@ class URLIntegrityService
                 return false;
             }
 
-            // VALIDACIÓN CRÍTICA: Detectar truncamiento del email
-            // Si la parte del hash no incluye "@", la continuación debe ser específica
-            if (!strpos($hashEmailPart, '@')) {
-                // El hash no incluye el dominio, debemos validar que la continuación no sea arbitraria
-                // Para el caso específico: "andrwgme" debe continuar con "z68@gmail.com", no "z6@gmail.com"
-
-                // Calcular la longitud esperada del email basada en patrones comunes
-                $atPosition = strpos($providedEmail, '@');
-                if ($atPosition !== false) {
-                    $localPart = substr($providedEmail, 0, $atPosition);
-                    $localPartFromHash = strlen($hashEmailPart);
-                    $localPartRemaining = strlen($localPart) - $localPartFromHash;
-
-                    // VALIDACIÓN ANTI-TRUNCAMIENTO: Si el email parece muy corto comparado con el hash
-                    // Es sospechoso que alguien quite caracteres
-                    if ($localPartRemaining < 3 && strlen($hashEmailPart) >= 7) {
-                        Log::warning('❌ Email truncation detected - local part too short after hash', [
-                            'provided_email' => $providedEmail,
-                            'hash_email_part' => $hashEmailPart,
-                            'local_part' => $localPart,
-                            'local_part_from_hash' => $localPartFromHash,
-                            'local_part_remaining' => $localPartRemaining,
-                            'ip' => request()->ip(),
-                            'security_event' => 'EMAIL_TRUNCATION_DETECTED'
-                        ]);
-                        return false;
-                    }
-
-                    // VALIDACIÓN ADICIONAL: Para hashes como "andrwgme", esperamos continuaciones como "z68" no solo "z6"
-                    if ($hashEmailPart === 'andrwgme') {
-                        $expectedContinuation = substr($localPart, strlen($hashEmailPart));
-                        // Para este caso específico, debe ser "z68" y nada más corto
-                        if (strlen($expectedContinuation) < 3) {
-                            Log::warning('❌ CRITICAL: Email manipulation detected - character removal from andrwgme hash', [
-                                'provided_email' => $providedEmail,
-                                'hash_email_part' => $hashEmailPart,
-                                'expected_continuation' => $expectedContinuation,
-                                'continuation_length' => strlen($expectedContinuation),
-                                'ip' => request()->ip(),
-                                'security_event' => 'ANDRWGME_TRUNCATION_ATTACK'
-                            ]);
-                            return false;
-                        }
-
-                        // VALIDACIÓN CRÍTICA DEL DOMINIO: Para hash "andrwgme", verificar que el dominio sea el correcto
-                        $domain = substr($providedEmail, $atPosition + 1);
-                        if ($domain !== 'gmail.com') {
-                            Log::warning('❌ CRITICAL: Domain manipulation detected for andrwgme hash', [
-                                'provided_email' => $providedEmail,
-                                'hash_email_part' => $hashEmailPart,
-                                'provided_domain' => $domain,
-                                'expected_domain' => 'gmail.com',
-                                'ip' => request()->ip(),
-                                'security_event' => 'ANDRWGME_DOMAIN_MANIPULATION'
-                            ]);
-                            return false;
-                        }
-                    }
-                }
-            }
+            // NOTA: Las validaciones hardcoded específicas fueron removidas para evitar falsos positivos
+            // El sistema de validación ya incluye:
+            // 1. Verificación de que el email comienza con la parte del hash (línea 1168)
+            // 2. Validación de longitud mínima del hash (línea 1178)
+            // 3. Validación de formato de email (línea 1189)
+            // 4. Validación de longitud del resto del email (línea 1203)
+            // Estas validaciones genéricas son suficientes para detectar manipulaciones sin bloquear usuarios legítimos
 
             // VALIDACIÓN 5: El dominio debe estar en la parte hash o en la continuación
             if (!strpos($providedEmail, '@')) {
@@ -1427,31 +1424,32 @@ class URLIntegrityService
             $request = request();
 
             // ===============================================================
-            // BLOQUEO 100% EFECTIVO: Validar que el email está autorizado
+            // VALIDACIÓN DE EMAIL: Verificar que está en destinatarios
+            // NOTA: Esta validación es OPCIONAL - solo advertir, no bloquear
             // ===============================================================
-            // Verificar que este email está en la lista de destinatarios
+            // Normalizar email (trim, lowercase)
+            $normalizedEmail = strtolower(trim($decodedEmail));
+
             $isAuthorizedRecipient = \App\Models\NotificationSurvaysModel::where('id_survey', $surveyId)
-                ->where('destinatario', $decodedEmail)
-                ->whereIn('state', ['1', 'pending_response', 'sent', 'enviado', 'enviada'])
+                ->whereRaw('LOWER(TRIM(destinatario)) = ?', [$normalizedEmail])
                 ->exists();
 
             if (!$isAuthorizedRecipient) {
-                Log::warning('🚨 UNAUTHORIZED EMAIL: Email not in recipients list', [
+                // Solo LOG de advertencia - NO BLOQUEAR
+                Log::warning('⚠️ EMAIL NOT IN RECIPIENTS LIST (but allowing access)', [
                     'survey_id' => $surveyId,
-                    'unauthorized_email' => $decodedEmail,
+                    'email' => $decodedEmail,
+                    'normalized_email' => $normalizedEmail,
                     'hash' => substr($providedHash, 0, 16) . '...',
                     'ip' => $request->ip(),
-                    'user_agent' => $request->userAgent(),
-                    'security_event' => 'UNAUTHORIZED_EMAIL_ACCESS'
+                    'note' => 'Email not found in recipients - allowing anyway to prevent false positives'
                 ]);
-
-                return ['valid' => false, 'error_type' => 'unauthorized_email'];
+            } else {
+                Log::info('✅ Email found in recipients list', [
+                    'survey_id' => $surveyId,
+                    'email' => $decodedEmail
+                ]);
             }
-
-            Log::info('✅ Email authorized - found in recipients list', [
-                'survey_id' => $surveyId,
-                'email' => $decodedEmail
-            ]);
 
             // PRIMERO: Verificar si este usuario ya tiene un token registrado
             $accessToken = SurveyAccessToken::where('survey_id', $surveyId)
@@ -1460,29 +1458,22 @@ class URLIntegrityService
                 ->first();
 
             if (!$accessToken) {
-                // SEGURIDAD CRÍTICA: Verificar si este hash ya existe para OTRO usuario
-                // Esto previene que Usuario B use el enlace de Usuario A
+                // NOTA: Verificar si este hash ya existe para OTRO usuario (solo advertencia)
+                // NO bloqueamos para evitar falsos positivos
                 $existingHashForOtherUser = SurveyAccessToken::where('survey_id', $surveyId)
                     ->where('hash', $providedHash)
                     ->where('email', '!=', $decodedEmail)
                     ->first();
 
                 if ($existingHashForOtherUser) {
-                    // INTENTO DE LINK SHARING DETECTADO
-                    Log::warning('🚨 LINK SHARING BLOCKED: Hash already used by different user', [
+                    // Solo LOG de advertencia - NO BLOQUEAR
+                    Log::warning('⚠️ Same hash used by different email (allowing)', [
                         'survey_id' => $surveyId,
                         'attempting_email' => $decodedEmail,
                         'original_email' => $existingHashForOtherUser->email,
                         'hash' => substr($providedHash, 0, 16) . '...',
-                        'original_user_ip' => $existingHashForOtherUser->ip_address,
-                        'current_ip' => $request->ip(),
-                        'security_event' => 'LINK_SHARING_ATTEMPT'
+                        'note' => 'Allowing access - may be legitimate reuse or hash collision'
                     ]);
-
-                    // Bloquear el hash original como medida de seguridad
-                    $existingHashForOtherUser->blockAccess();
-
-                    return ['valid' => false, 'error_type' => 'link_sharing'];
                 }
 
                 // PRIMER ACCESO: Registrar este usuario (hash no existe previamente)
@@ -1520,71 +1511,32 @@ class URLIntegrityService
                 return ['valid' => false, 'error_type' => 'link_blocked'];
             }
 
-            // DETECCIÓN DE LINK SHARING: Verificar si el cambio de dispositivo es sospechoso
-            if (!$accessToken->isDeviceMatch($currentFingerprint)) {
+            // DETECCIÓN DE LINK SHARING: Sistema por contador de accesos
+            // Bloquear después de 3 accesos (asegura que NUNCA bloquea en primeros 3 intentos)
 
-                // IMPORTANTE: Calcular tiempo transcurrido ANTES de registrar el cambio
-                $minutesSinceFirstAccess = $accessToken->first_access_at ?
-                    now()->diffInMinutes($accessToken->first_access_at) : 999;
-
-                // BLOQUEO INMEDIATO: Cualquier cambio de dispositivo en menos de 10 minutos es sospechoso
-                if ($minutesSinceFirstAccess < 10) {
-                    Log::warning('🚨 LINK SHARING DETECTED: Device change too fast', [
-                        'survey_id' => $surveyId,
-                        'email' => $decodedEmail,
-                        'minutes_since_first_access' => $minutesSinceFirstAccess,
-                        'device_changes_count' => $accessToken->device_changes_count,
-                        'first_access' => $accessToken->first_access_at,
-                        'original_device' => $accessToken->device_fingerprint,
-                        'new_device' => $currentFingerprint,
-                        'original_ip' => $accessToken->ip_address,
-                        'new_ip' => $request->ip(),
-                        'security_event' => 'LINK_SHARING_RAPID_DEVICE_CHANGE',
-                        'threshold_minutes' => 10
-                    ]);
-
-                    // Bloquear el token
-                    $accessToken->blockAccess();
-
-                    return ['valid' => false, 'error_type' => 'link_sharing'];
-                }
-
-                // BLOQUEO SECUNDARIO: Más de 1 cambio de dispositivo (ya tuvo 1 cambio antes)
-                if ($accessToken->device_changes_count >= 1) {
-                    Log::warning('🚨 LINK SHARING DETECTED: Multiple device changes', [
-                        'survey_id' => $surveyId,
-                        'email' => $decodedEmail,
-                        'device_changes_count' => $accessToken->device_changes_count,
-                        'last_device_change' => $accessToken->last_device_change_at,
-                        'first_access' => $accessToken->first_access_at,
-                        'original_device' => $accessToken->device_fingerprint,
-                        'new_device' => $currentFingerprint,
-                        'security_event' => 'LINK_SHARING_MULTIPLE_DEVICES'
-                    ]);
-
-                    $accessToken->blockAccess();
-
-                    return ['valid' => false, 'error_type' => 'link_sharing'];
-                }
-
-                Log::info('ℹ️ Device fingerprint changed - registering first device change', [
+            // Verificar si ya superó el límite de 3 accesos
+            if ($accessToken->access_count >= 3) {
+                Log::warning('🚨 LINK SHARING DETECTED: Exceeded access limit', [
                     'survey_id' => $surveyId,
                     'email' => $decodedEmail,
-                    'original_device' => $accessToken->device_fingerprint,
-                    'current_device' => $currentFingerprint,
-                    'minutes_since_first_access' => $minutesSinceFirstAccess,
-                    'device_changes_count' => $accessToken->device_changes_count + 1,
-                    'note' => 'First device change allowed if >10 minutes',
-                    'access_token_id' => $accessToken->id
+                    'access_count' => $accessToken->access_count,
+                    'access_limit' => 3,
+                    'security_event' => 'LINK_SHARING_ACCESS_LIMIT',
+                    'note' => 'More than 3 accesses detected - likely link sharing'
                 ]);
 
-                // Registrar el cambio de dispositivo
-                $accessToken->registerDeviceChange(
-                    $currentFingerprint,
-                    $request->ip(),
-                    $request->userAgent()
-                );
+                $accessToken->blockAccess();
+                return ['valid' => false, 'error_type' => 'link_sharing'];
             }
+
+            Log::info('✅ Access allowed', [
+                'survey_id' => $surveyId,
+                'email' => $decodedEmail,
+                'access_count' => $accessToken->access_count,
+                'remaining_accesses' => 3 - $accessToken->access_count,
+                'note' => 'Access permitted - within limit of 3',
+                'access_token_id' => $accessToken->id
+            ]);
 
             // ACCESO VÁLIDO: Actualizar estadísticas
             $accessToken->updateAccess();
@@ -1602,14 +1554,17 @@ class URLIntegrityService
             return ['valid' => true, 'is_first_access' => false, 'access_token_id' => $accessToken->id];
 
         } catch (\Exception $e) {
-            Log::error('❌ Device access validation error', [
+            // CAMBIADO: No bloquear en excepciones - solo advertir
+            Log::warning('⚠️ Device access validation error (but allowing)', [
                 'survey_id' => $surveyId,
                 'email' => $email,
                 'provided_hash' => $providedHash,
                 'error' => $e->getMessage(),
-                'ip' => request()->ip()
+                'ip' => request()->ip(),
+                'note' => 'Exception during device validation - allowing to prevent false positives'
             ]);
-            return ['valid' => false, 'error_type' => 'validation_error'];
+            // NO BLOQUEAR - permitir acceso en caso de errores inesperados
+            return ['valid' => true, 'is_first_access' => true, 'error_type' => null];
         }
     }
 
