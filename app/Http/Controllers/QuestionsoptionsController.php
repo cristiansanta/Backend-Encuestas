@@ -128,32 +128,37 @@ class QuestionsoptionsController extends Controller
      */
     public function update(Request $request, string $id)
     {
-        //
         $questionoptions = QuestionsoptionsModel::find($id);
         if ($questionoptions) {
-            // Validar los datos de la solicitud
+            // Validar solo el campo options (los demás son opcionales)
             $request->validate([
-              'questions_id' => 'required|integer',
-              'options' => 'required|string',
-              'creator_id'=> 'required|integer',
-              'status'=> 'required|boolean',
-
-              
+              'options' => 'required|string|max:255',
             ]);
-    
-            // Actualizar los campos
-            $questionoptions->questions_id = $request->questions_id;
-            $questionoptions->options = $request->options;  
-            $questionoptions->creator_id = $request->creator_id;
-            $questionoptions->status = $request->status;      
-    
+
+            // Actualizar solo el campo options (texto de la opción)
+            $questionoptions->options = $request->options;
+
+            // Actualizar otros campos solo si se proporcionan
+            if ($request->has('questions_id')) {
+                $questionoptions->questions_id = $request->questions_id;
+            }
+            if ($request->has('creator_id')) {
+                $questionoptions->creator_id = $request->creator_id;
+            }
+            if ($request->has('status')) {
+                $questionoptions->status = $request->status;
+            }
+
             if ($questionoptions->save()) {
-                return response()->json(['message' => 'Actualizado con éxito'], 200);
+                return response()->json([
+                    'message' => 'Opción actualizada con éxito',
+                    'option' => $questionoptions
+                ], 200);
             } else {
-                return response()->json(['message' => 'Error al actualizar'], 500);
+                return response()->json(['message' => 'Error al actualizar la opción'], 500);
             }
         } else {
-            return response()->json(['message' => 'No se encontró el registro'], 404);
+            return response()->json(['message' => 'No se encontró la opción'], 404);
         }
     }
 
@@ -281,20 +286,17 @@ class QuestionsoptionsController extends Controller
     public function destroy(string $id)
     {
         $questionoptions = QuestionsoptionsModel::find($id);
-    
+
         if ($questionoptions) {
-            // Verificar si la categoría está siendo utilizada como llave foránea en otra tabla
-            if ($questionoptions->questionoptions()->count() > 0) {
-                return response()->json(['message' => 'No se puede eliminar la categoría porque está siendo utilizada en otras encuestas'], 409);
-            }
-    
+            // Eliminar la opción directamente sin verificaciones adicionales
+            // Las opciones pueden eliminarse libremente siempre que la pregunta lo permita
             if ($questionoptions->delete()) {
-                return response()->json(['message' => 'Eliminado con éxito'], 200);
+                return response()->json(['message' => 'Opción eliminada con éxito'], 200);
             } else {
-                return response()->json(['message' => 'Error al eliminar'], 500);
+                return response()->json(['message' => 'Error al eliminar la opción'], 500);
             }
         } else {
-            return response()->json(['message' => 'No se encontró la registro'], 404);
+            return response()->json(['message' => 'No se encontró la opción'], 404);
         }
     }
 }
