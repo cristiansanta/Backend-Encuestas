@@ -22,27 +22,30 @@ class QuestionController extends Controller
     {
         // Obtener el usuario autenticado
         $user = $request->user();
-        
+
         if (!$user) {
             return response()->json(['message' => 'Usuario no autenticado'], 401);
         }
-        
+
         $query = QuestionModel::query();
-        
-        // Aplicar filtros de visibilidad según permisos
-        $query->where(function($q) use ($user) {
-            // Incluir preguntas del propio usuario
-            $q->where('creator_id', $user->id);
-            
-            // Incluir preguntas de otros usuarios que tengan el permiso habilitado
-            $q->orWhereHas('creator', function($userQuery) {
-                $userQuery->where('allow_view_questions_categories', true);
+
+        // MODIFICADO: Si se solicita el banco (bank=true), mostrar TODAS las preguntas del banco
+        // Si NO se solicita el banco, aplicar filtros de visibilidad normales
+        if ($request->has('bank') && $request->bank == 'true') {
+            // Para el banco de preguntas, mostrar TODAS las preguntas que tengan bank=true
+            // Esto permite que todos los usuarios vean y reutilicen preguntas del banco
+            $query->where('bank', true);
+        } else {
+            // Para preguntas NO del banco, aplicar filtros de visibilidad según permisos
+            $query->where(function($q) use ($user) {
+                // Incluir preguntas del propio usuario
+                $q->where('creator_id', $user->id);
+
+                // Incluir preguntas de otros usuarios que tengan el permiso habilitado
+                $q->orWhereHas('creator', function($userQuery) {
+                    $userQuery->where('allow_view_questions_categories', true);
+                });
             });
-        });
-        
-        // Filtrar por banco si se especifica
-        if ($request->has('bank')) {
-            $query->where('bank', $request->bank);
         }
         
         // Filtrar por tipo de pregunta si se especifica
@@ -277,34 +280,82 @@ public function store(Request $request)
     }
 
     if ($existingQuestion) {
-        // Log para debugging mejorado
-        \Log::info('Question duplicate detected', [
-            'existing_id' => $existingQuestion->id,
-            'existing_title' => $existingQuestion->title,
-            'existing_cod_padre' => $existingQuestion->cod_padre,
-            'existing_section_id' => $existingQuestion->section_id,
-            'requested_title' => $data['title'],
-            'requested_cod_padre' => $data['cod_padre'] ?? 0,
-            'requested_section_id' => $data['section_id'],
-            'user_id' => $user->id,
-            'is_child_question' => isset($data['cod_padre']) && $data['cod_padre'] > 0
-        ]);
-        
-        $messageType = isset($data['cod_padre']) && $data['cod_padre'] > 0 
-            ? 'pregunta hija' 
-            : 'pregunta';
-            
-        return response()->json([
-            'id' => $existingQuestion->id,
-            'message' => "La {$messageType} ya fue creada exitosamente (duplicado detectado)",
-            'existing' => true,
-            'duplicate_reason' => isset($data['cod_padre']) && $data['cod_padre'] > 0 
-                ? 'same_title_description_type_parent' 
-                : 'same_title_description_type',
-            'note' => isset($data['cod_padre']) && $data['cod_padre'] > 0 
-                ? 'Las preguntas hijas duplicadas se detectan por contenido Y relación padre-hija'
-                : 'Las preguntas duplicadas se detectan por contenido'
-        ], 200);
+        // EXCEPCIÓN: Si se está importando desde el banco individualmente, permitir reutilización
+        $isImportedFromBank = isset($data['imported_from_bank']) && $data['imported_from_bank'] === true;
+        $hasSurveyId = isset($data['survey_id']) && $data['survey_id'];
+
+        // Si es una pregunta del banco y está siendo importada a una encuesta
+        if ($isImportedFromBank && $hasSurveyId && $existingQuestion->bank === true) {
+            \Log::info('Question imported from bank - associating with survey', [
+                'question_id' => $existingQuestion->id,
+                'survey_id' => $data['survey_id'],
+                'title' => $data['title'],
+                'action' => 'reusing_bank_question'
+            ]);
+
+            // Verificar si ya está asociada con esta encuesta
+            $alreadyInSurvey = SurveyquestionsModel::where('survey_id', $data['survey_id'])
+                                                    ->where('question_id', $existingQuestion->id)
+                                                    ->exists();
+
+            if (!$alreadyInSurvey) {
+                // Asociar la pregunta existente del banco con la encuesta
+                SurveyquestionsModel::create([
+                    'survey_id' => $data['survey_id'],
+                    'question_id' => $existingQuestion->id,
+                    'section_id' => $data['section_id'],
+                    'creator_id' => $user->id,
+                    'user_id' => $user->id,
+                    'status' => true,
+                ]);
+
+                \Log::info('Bank question associated with survey', [
+                    'question_id' => $existingQuestion->id,
+                    'survey_id' => $data['survey_id']
+                ]);
+            } else {
+                \Log::info('Bank question already associated with survey', [
+                    'question_id' => $existingQuestion->id,
+                    'survey_id' => $data['survey_id']
+                ]);
+            }
+
+            // Retornar la pregunta existente
+            return response()->json([
+                'id' => $existingQuestion->id,
+                'message' => 'Pregunta del banco reutilizada exitosamente',
+                'reused_from_bank' => true
+            ], 200);
+        } else {
+            // Log para debugging mejorado
+            \Log::info('Question duplicate detected', [
+                'existing_id' => $existingQuestion->id,
+                'existing_title' => $existingQuestion->title,
+                'existing_cod_padre' => $existingQuestion->cod_padre,
+                'existing_section_id' => $existingQuestion->section_id,
+                'requested_title' => $data['title'],
+                'requested_cod_padre' => $data['cod_padre'] ?? 0,
+                'requested_section_id' => $data['section_id'],
+                'user_id' => $user->id,
+                'is_child_question' => isset($data['cod_padre']) && $data['cod_padre'] > 0
+            ]);
+
+            $messageType = isset($data['cod_padre']) && $data['cod_padre'] > 0
+                ? 'pregunta hija'
+                : 'pregunta';
+
+            return response()->json([
+                'id' => $existingQuestion->id,
+                'message' => "La {$messageType} ya fue creada exitosamente (duplicado detectado)",
+                'existing' => true,
+                'duplicate_reason' => isset($data['cod_padre']) && $data['cod_padre'] > 0
+                    ? 'same_title_description_type_parent'
+                    : 'same_title_description_type',
+                'note' => isset($data['cod_padre']) && $data['cod_padre'] > 0
+                    ? 'Las preguntas hijas duplicadas se detectan por contenido Y relación padre-hija'
+                    : 'Las preguntas duplicadas se detectan por contenido'
+            ], 200);
+        }
     }
     
     // NUEVO: Lógica de actualización completa para cualquier campo
@@ -742,7 +793,28 @@ public function store(Request $request)
             if ($question->save()) {
                 // Auditoría después de actualizar
                 QuestionIntegrityService::auditQuestionIntegrityChange('UPDATE', $questionBefore, $question, $request->user()->id ?? null);
-                
+
+                // NUEVO: Actualizar opciones si se proporcionan (para preguntas de opción única/múltiple)
+                if ($request->has('options') && is_array($request->options)) {
+                    // Eliminar opciones existentes
+                    QuestionsoptionsModel::where('questions_id', $question->id)->delete();
+
+                    // Crear las nuevas opciones
+                    $userId = $request->user()->id ?? $question->creator_id;
+                    foreach ($request->options as $option) {
+                        $optionText = is_array($option) ? ($option['option'] ?? $option['text'] ?? '') : $option;
+
+                        if (!empty($optionText)) {
+                            QuestionsoptionsModel::create([
+                                'questions_id' => $question->id,
+                                'options' => $optionText,
+                                'creator_id' => $userId,
+                                'status' => true,
+                            ]);
+                        }
+                    }
+                }
+
                 return response()->json(['message' => 'Actualizado con éxito'], 200);
             } else {
                 return response()->json(['message' => 'Error al actualizar'], 500);
@@ -782,6 +854,38 @@ public function store(Request $request)
             // Iniciar una transacción para garantizar que todos los pasos se completen correctamente
             try {
                 DB::beginTransaction();
+
+                // CRÍTICO: Si la pregunta pertenece al banco (bank=true), NO eliminarla completamente
+                // Solo desasociarla de las encuestas para que siga disponible en el banco
+                if ($question->bank === true) {
+                    \Log::info('BANK QUESTION DELETE: Preserving bank question, only removing survey associations', [
+                        'question_id' => $question->id,
+                        'title' => $question->title,
+                        'type' => $question->type_questions_id,
+                        'section_id' => $question->section_id
+                    ]);
+
+                    // Solo eliminar las asociaciones con encuestas, pero mantener la pregunta en el banco
+                    $question->surveyQuestions()->delete();
+
+                    // NO eliminar condiciones ni opciones, ya que la pregunta sigue existiendo en el banco
+                    // NO eliminar la pregunta en sí
+
+                    DB::commit();
+
+                    return response()->json([
+                        'message' => 'Pregunta desasociada de la encuesta, pero preservada en el banco',
+                        'preserved_in_bank' => true,
+                        'question_id' => $question->id
+                    ], 200);
+                }
+
+                // Si la pregunta NO es del banco, eliminarla completamente como antes
+                \Log::info('NON-BANK QUESTION DELETE: Completely removing question', [
+                    'question_id' => $question->id,
+                    'title' => $question->title,
+                    'bank' => false
+                ]);
 
                 // Eliminar las condiciones relacionadas
                 $question->conditions()->delete();
