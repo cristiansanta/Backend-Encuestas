@@ -855,6 +855,38 @@ public function store(Request $request)
             try {
                 DB::beginTransaction();
 
+                // CRÍTICO: Si la pregunta pertenece al banco (bank=true), NO eliminarla completamente
+                // Solo desasociarla de las encuestas para que siga disponible en el banco
+                if ($question->bank === true) {
+                    \Log::info('BANK QUESTION DELETE: Preserving bank question, only removing survey associations', [
+                        'question_id' => $question->id,
+                        'title' => $question->title,
+                        'type' => $question->type_questions_id,
+                        'section_id' => $question->section_id
+                    ]);
+
+                    // Solo eliminar las asociaciones con encuestas, pero mantener la pregunta en el banco
+                    $question->surveyQuestions()->delete();
+
+                    // NO eliminar condiciones ni opciones, ya que la pregunta sigue existiendo en el banco
+                    // NO eliminar la pregunta en sí
+
+                    DB::commit();
+
+                    return response()->json([
+                        'message' => 'Pregunta desasociada de la encuesta, pero preservada en el banco',
+                        'preserved_in_bank' => true,
+                        'question_id' => $question->id
+                    ], 200);
+                }
+
+                // Si la pregunta NO es del banco, eliminarla completamente como antes
+                \Log::info('NON-BANK QUESTION DELETE: Completely removing question', [
+                    'question_id' => $question->id,
+                    'title' => $question->title,
+                    'bank' => false
+                ]);
+
                 // Eliminar las condiciones relacionadas
                 $question->conditions()->delete();
 
