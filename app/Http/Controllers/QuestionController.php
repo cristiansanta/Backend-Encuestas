@@ -165,33 +165,86 @@ public function store(Request $request)
     // La detección de duplicados debe aplicarse a TODAS las preguntas
     $existingQuestion = null;
 
-    // MEJORADO: Verificar duplicados por título, tipo, sección y usuario
-    $duplicateQuery = QuestionModel::where('title', $data['title'])
-                                  ->where('type_questions_id', $data['type_questions_id'])
-                                  ->where('creator_id', $user->id);
-
-    // CRÍTICO: Para preguntas del banco, incluir section_id en la búsqueda
-    if (isset($data['section_id']) && $data['section_id']) {
-        $duplicateQuery->where('section_id', $data['section_id']);
-    }
-
-    // CRÍTICO: Para preguntas hijas (cod_padre > 0), incluir cod_padre en la búsqueda
-    if (isset($data['cod_padre']) && $data['cod_padre'] > 0) {
-        $duplicateQuery->where('cod_padre', $data['cod_padre']);
-        \Log::info('Child question duplicate check', [
-            'title' => $data['title'],
-            'cod_padre' => $data['cod_padre'],
-            'section_id' => $data['section_id'] ?? null,
-            'user_id' => $user->id
-        ]);
-    }
-
-    // CRÍTICO: Para preguntas del banco, también verificar por bank = true
+    // VALIDACIÓN ESPECIAL PARA PREGUNTAS DEL BANCO
     if (isset($data['bank']) && $data['bank'] === true) {
-        $duplicateQuery->where('bank', true);
-    }
+        // Para preguntas del banco, verificar duplicados de forma más estricta:
+        // 1. Verificar si existe una pregunta con el mismo título dentro de la misma sección
+        // 2. Verificar si existe una pregunta con el mismo título en CUALQUIER sección del banco
 
-    $existingQuestion = $duplicateQuery->first();
+        // Verificación 1: Duplicado en la misma sección
+        if (isset($data['section_id']) && $data['section_id']) {
+            $duplicateInSection = QuestionModel::where('title', $data['title'])
+                                               ->where('bank', true)
+                                               ->where('section_id', $data['section_id'])
+                                               ->first();
+
+            if ($duplicateInSection) {
+                \Log::info('Bank question duplicate detected in same section', [
+                    'existing_id' => $duplicateInSection->id,
+                    'title' => $data['title'],
+                    'section_id' => $data['section_id'],
+                    'creator_id' => $duplicateInSection->creator_id
+                ]);
+
+                return response()->json([
+                    'error' => 'Ya existe una pregunta con este nombre en la misma sección del banco',
+                    'duplicate_in_section' => true,
+                    'existing_question_id' => $duplicateInSection->id,
+                    'section_id' => $data['section_id']
+                ], 422);
+            }
+        }
+
+        // Verificación 2: Duplicado global en todo el banco (cualquier sección)
+        $duplicateInBank = QuestionModel::where('title', $data['title'])
+                                        ->where('bank', true)
+                                        ->first();
+
+        if ($duplicateInBank) {
+            \Log::info('Bank question duplicate detected globally', [
+                'existing_id' => $duplicateInBank->id,
+                'title' => $data['title'],
+                'existing_section_id' => $duplicateInBank->section_id,
+                'requested_section_id' => $data['section_id'] ?? null,
+                'creator_id' => $duplicateInBank->creator_id
+            ]);
+
+            return response()->json([
+                'error' => 'Ya existe una pregunta con este nombre en el banco de preguntas',
+                'duplicate_global' => true,
+                'existing_question_id' => $duplicateInBank->id,
+                'existing_section_id' => $duplicateInBank->section_id,
+                'suggested_action' => 'Por favor, utilice un nombre diferente para esta pregunta'
+            ], 422);
+        }
+
+        // Si no se encontraron duplicados en el banco, continuar con la creación
+        $existingQuestion = null;
+
+    } else {
+        // MEJORADO: Verificar duplicados por título, tipo, sección y usuario (para preguntas NO del banco)
+        $duplicateQuery = QuestionModel::where('title', $data['title'])
+                                      ->where('type_questions_id', $data['type_questions_id'])
+                                      ->where('creator_id', $user->id);
+
+        // CRÍTICO: Para preguntas del banco, incluir section_id en la búsqueda
+        if (isset($data['section_id']) && $data['section_id']) {
+            $duplicateQuery->where('section_id', $data['section_id']);
+        }
+
+        // CRÍTICO: Para preguntas hijas (cod_padre > 0), incluir cod_padre en la búsqueda
+        if (isset($data['cod_padre']) && $data['cod_padre'] > 0) {
+            $duplicateQuery->where('cod_padre', $data['cod_padre']);
+            \Log::info('Child question duplicate check', [
+                'title' => $data['title'],
+                'cod_padre' => $data['cod_padre'],
+                'section_id' => $data['section_id'] ?? null,
+                'user_id' => $user->id
+            ]);
+        }
+
+        $existingQuestion = $duplicateQuery->first();
+    }
 
     if ($existingQuestion) {
         \Log::info('Question already exists - preventing duplication', [
@@ -616,9 +669,9 @@ public function store(Request $request)
             }
         }
         
-        // Cargar la pregunta con sus opciones para la respuesta
-        $questionWithOptions = QuestionModel::with(['options', 'type'])->find($question->id);
-        
+        // Cargar la pregunta con sus opciones, tipo y creador para la respuesta
+        $questionWithOptions = QuestionModel::with(['options', 'type', 'creator:id,name'])->find($question->id);
+
         return response()->json($questionWithOptions, 200);
     } catch (\Exception $e) {
         return response()->json(['error' => 'Error al crear la pregunta', 'details' => $e->getMessage()], 500);
@@ -725,7 +778,62 @@ public function store(Request $request)
                         return response()->json(['error' => 'Error de integridad referencial', 'details' => 'La pregunta padre especificada no existe o no pertenece al usuario'], 422);
                     }
                 }
-    
+
+                // VALIDACIÓN DE DUPLICADOS PARA PREGUNTAS DEL BANCO AL ACTUALIZAR
+                if ($request->has('bank') && $request->bank === true) {
+                    // Solo validar si el título está cambiando
+                    if ($request->has('title') && $request->title !== $question->title) {
+                        // Verificación 1: Duplicado en la misma sección
+                        if ($request->has('section_id') && $request->section_id) {
+                            $duplicateInSection = QuestionModel::where('title', $request->title)
+                                                               ->where('bank', true)
+                                                               ->where('section_id', $request->section_id)
+                                                               ->where('id', '!=', $id) // Excluir la pregunta actual
+                                                               ->first();
+
+                            if ($duplicateInSection) {
+                                \Log::info('Bank question duplicate detected in same section during update', [
+                                    'updating_id' => $id,
+                                    'existing_id' => $duplicateInSection->id,
+                                    'title' => $request->title,
+                                    'section_id' => $request->section_id
+                                ]);
+
+                                return response()->json([
+                                    'error' => 'Ya existe una pregunta con este nombre en la misma sección del banco',
+                                    'duplicate_in_section' => true,
+                                    'existing_question_id' => $duplicateInSection->id,
+                                    'section_id' => $request->section_id
+                                ], 422);
+                            }
+                        }
+
+                        // Verificación 2: Duplicado global en todo el banco
+                        $duplicateInBank = QuestionModel::where('title', $request->title)
+                                                        ->where('bank', true)
+                                                        ->where('id', '!=', $id) // Excluir la pregunta actual
+                                                        ->first();
+
+                        if ($duplicateInBank) {
+                            \Log::info('Bank question duplicate detected globally during update', [
+                                'updating_id' => $id,
+                                'existing_id' => $duplicateInBank->id,
+                                'title' => $request->title,
+                                'existing_section_id' => $duplicateInBank->section_id,
+                                'requested_section_id' => $request->section_id ?? null
+                            ]);
+
+                            return response()->json([
+                                'error' => 'Ya existe una pregunta con este nombre en el banco de preguntas',
+                                'duplicate_global' => true,
+                                'existing_question_id' => $duplicateInBank->id,
+                                'existing_section_id' => $duplicateInBank->section_id,
+                                'suggested_action' => 'Por favor, utilice un nombre diferente para esta pregunta'
+                            ], 422);
+                        }
+                    }
+                }
+
                 // Actualizar todos los campos
                 $question->title = $request->title;
                 
@@ -855,14 +963,20 @@ public function store(Request $request)
             try {
                 DB::beginTransaction();
 
-                // CRÍTICO: Si la pregunta pertenece al banco (bank=true), NO eliminarla completamente
-                // Solo desasociarla de las encuestas para que siga disponible en el banco
-                if ($question->bank === true) {
-                    \Log::info('BANK QUESTION DELETE: Preserving bank question, only removing survey associations', [
+                // Obtener el usuario autenticado
+                $user = auth()->user();
+
+                // CRÍTICO: Si la pregunta pertenece al banco (bank=true) Y NO es del usuario actual,
+                // NO eliminarla completamente - solo desasociarla de las encuestas
+                // PERO: Si el usuario es el creador, SÍ permitir eliminarla completamente
+                if ($question->bank === true && $question->creator_id !== $user->id) {
+                    \Log::info('BANK QUESTION DELETE: Preserving bank question (not owner), only removing survey associations', [
                         'question_id' => $question->id,
                         'title' => $question->title,
                         'type' => $question->type_questions_id,
-                        'section_id' => $question->section_id
+                        'section_id' => $question->section_id,
+                        'creator_id' => $question->creator_id,
+                        'user_id' => $user->id
                     ]);
 
                     // Solo eliminar las asociaciones con encuestas, pero mantener la pregunta en el banco

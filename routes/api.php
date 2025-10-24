@@ -323,6 +323,7 @@ Route::middleware(['debug.auth', 'auth:sanctum'])->group(function () {
         Route::get('/', 'index')->name('groups.index');
         Route::post('/store', 'store')->name('groups.store');
         Route::get('/{id}', 'show')->name('groups.show');
+        Route::put('/{id}', 'update')->name('groups.update');
         Route::delete('/{id}', 'destroy')->name('groups.destroy');
         Route::get('/{id}/users', 'getGroupUsers')->name('groups.getGroupUsers');
         Route::post('/add-user', 'addUser')->name('groups.addUser');
