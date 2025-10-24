@@ -669,9 +669,9 @@ public function store(Request $request)
             }
         }
         
-        // Cargar la pregunta con sus opciones para la respuesta
-        $questionWithOptions = QuestionModel::with(['options', 'type'])->find($question->id);
-        
+        // Cargar la pregunta con sus opciones, tipo y creador para la respuesta
+        $questionWithOptions = QuestionModel::with(['options', 'type', 'creator:id,name'])->find($question->id);
+
         return response()->json($questionWithOptions, 200);
     } catch (\Exception $e) {
         return response()->json(['error' => 'Error al crear la pregunta', 'details' => $e->getMessage()], 500);
@@ -963,14 +963,20 @@ public function store(Request $request)
             try {
                 DB::beginTransaction();
 
-                // CRÍTICO: Si la pregunta pertenece al banco (bank=true), NO eliminarla completamente
-                // Solo desasociarla de las encuestas para que siga disponible en el banco
-                if ($question->bank === true) {
-                    \Log::info('BANK QUESTION DELETE: Preserving bank question, only removing survey associations', [
+                // Obtener el usuario autenticado
+                $user = auth()->user();
+
+                // CRÍTICO: Si la pregunta pertenece al banco (bank=true) Y NO es del usuario actual,
+                // NO eliminarla completamente - solo desasociarla de las encuestas
+                // PERO: Si el usuario es el creador, SÍ permitir eliminarla completamente
+                if ($question->bank === true && $question->creator_id !== $user->id) {
+                    \Log::info('BANK QUESTION DELETE: Preserving bank question (not owner), only removing survey associations', [
                         'question_id' => $question->id,
                         'title' => $question->title,
                         'type' => $question->type_questions_id,
-                        'section_id' => $question->section_id
+                        'section_id' => $question->section_id,
+                        'creator_id' => $question->creator_id,
+                        'user_id' => $user->id
                     ]);
 
                     // Solo eliminar las asociaciones con encuestas, pero mantener la pregunta en el banco

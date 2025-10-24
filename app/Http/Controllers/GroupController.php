@@ -14,25 +14,53 @@ class GroupController extends Controller
     /**
      * Obtener todos los grupos
      * Ahora solo cuenta de la tabla group_users (fuente de verdad única)
+     * Respeta el permiso allow_view_other_users_groups
      */
     public function index()
     {
         try {
-            $groups = GroupModel::with('users')->get()->map(function ($group) {
-                // Contar SOLO de la tabla (fuente de verdad única)
-                $usersFromTable = $group->users->count();
+            // Obtener el usuario autenticado
+            $user = Auth::user();
 
-                return [
-                    'id' => $group->id,
-                    'name' => $group->name,
-                    'description' => $group->description,
-                    'count' => $usersFromTable,
-                    'user_count' => $usersFromTable,
-                    'users_count' => $usersFromTable, // Campo que espera el frontend
-                    'created_at' => $group->created_at,
-                    'updated_at' => $group->updated_at
-                ];
-            });
+            if (!$user) {
+                return response()->json([
+                    'message' => 'Usuario no autenticado'
+                ], 401);
+            }
+
+            $userId = $user->id;
+            $userRole = $user->rol ?? '';
+
+            // Verificar si el usuario tiene permiso para ver grupos de otros usuarios
+            // Superadmin y Admin siempre pueden ver todos los grupos
+            $canViewOtherUsersGroups = ($userRole === 'super_admin' || $userRole === 'admin')
+                                        || ($user->allow_view_other_users_groups ?? false);
+
+            // Construir query base
+            $query = GroupModel::with('users');
+
+            // Si NO tiene permiso para ver grupos de otros usuarios, filtrar solo sus grupos
+            if (!$canViewOtherUsersGroups) {
+                $query->where('created_by', $userId);
+            }
+
+            // Obtener grupos y mapear la respuesta
+            $groups = $query->get()
+                ->map(function ($group) {
+                    // Contar SOLO de la tabla (fuente de verdad única)
+                    $usersFromTable = $group->users->count();
+
+                    return [
+                        'id' => $group->id,
+                        'name' => $group->name,
+                        'description' => $group->description,
+                        'count' => $usersFromTable,
+                        'user_count' => $usersFromTable,
+                        'users_count' => $usersFromTable, // Campo que espera el frontend
+                        'created_at' => $group->created_at,
+                        'updated_at' => $group->updated_at
+                    ];
+                });
 
             return response()->json($groups, 200);
         } catch (\Exception $e) {
@@ -133,44 +161,43 @@ class GroupController extends Controller
                     
                     // Log para monitorear el progreso
                     \Log::info("GroupController store - Procesando {$userCount} usuarios");
-                    
-                    // VALIDAR DUPLICADOS ANTES DE CREAR
-                    $duplicateUsers = [];
-                    foreach ($requestData['users'] as $userData) {
-                        if (isset($userData['tipo_documento']) && isset($userData['numero_documento'])) {
-                            $existing = GroupUserModel::where('tipo_documento', $userData['tipo_documento'])
-                                ->where('numero_documento', $userData['numero_documento'])
-                                ->with('group')
-                                ->first();
 
-                            if ($existing) {
-                                $duplicateUsers[] = [
-                                    'nombre' => $userData['nombre'],
-                                    'correo' => $userData['correo'],
-                                    'documento' => $userData['tipo_documento'] . ' ' . $userData['numero_documento'],
-                                    'grupo_existente' => $existing->group ? $existing->group->name : 'Desconocido'
-                                ];
-                            }
-                        }
-                    }
-
-                    // Si hay duplicados, rechazar la creación del grupo
-                    if (!empty($duplicateUsers)) {
-                        return response()->json([
-                            'message' => 'Algunos usuarios ya existen en otros grupos',
-                            'duplicates' => $duplicateUsers
-                        ], 409);
-                    }
+                    // NOTA: Los usuarios PUEDEN pertenecer a múltiples grupos
+                    // No se valida duplicados - un mismo encuestado puede estar en varios grupos
 
                     // Procesar usuarios en lotes para optimizar memoria
                     $batchSize = 500;
                     $batches = array_chunk($requestData['users'], $batchSize);
 
+                    // Rastrear correos procesados en memoria para evitar duplicados en el CSV
+                    $processedEmails = [];
+
                     foreach ($batches as $batchIndex => $batch) {
                         \Log::info("GroupController store - Procesando lote " . ($batchIndex + 1) . " de " . count($batches));
 
                         foreach ($batch as $userData) {
-                            // Crear registro en la tabla group_users primero
+                            $email = $userData['correo'];
+
+                            // 1. Verificar si este correo ya fue procesado en ESTE request (duplicado en CSV)
+                            if (isset($processedEmails[$email])) {
+                                \Log::info("Usuario {$email} ya fue procesado en este request, omitiendo duplicado del CSV...");
+                                continue;
+                            }
+
+                            // 2. Verificar si este usuario ya existe en ESTE grupo en la base de datos
+                            $existsInThisGroup = GroupUserModel::where('group_id', $group->id)
+                                ->where('correo', $email)
+                                ->exists();
+
+                            if ($existsInThisGroup) {
+                                \Log::info("Usuario {$email} ya existe en este grupo en la BD, omitiendo...");
+                                continue; // Skip este usuario, ya está en el grupo
+                            }
+
+                            // Marcar este correo como procesado
+                            $processedEmails[$email] = true;
+
+                            // Crear registro en la tabla group_users
                             $groupUser = GroupUserModel::create([
                                 'group_id' => $group->id,
                                 'nombre' => $userData['nombre'],
